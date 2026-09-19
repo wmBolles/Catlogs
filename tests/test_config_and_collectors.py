@@ -36,6 +36,7 @@ from catlogs.collectors import collect_custom_logs, collect_all, collect_power_e
 from catlogs.crypto import SEC_KEY, decrypt_data
 from catlogs.process_monitor import parse_process_snapshot
 from catlogs.safe_exec import build_command_preview_args
+from catlogs.updater import compare_versions, get_update_state
 
 try:
     from catlogs.gui import CatLogsApp
@@ -179,6 +180,15 @@ class TestSecurityHardening(unittest.TestCase):
         self.assertEqual(rows[1]["name"], "<defunct>")
         self.assertEqual(rows[1]["cpu"], "0.0")
         self.assertEqual(rows[1]["command"], "[kworker/0:1-events]")
+
+    def test_update_version_compare_and_state(self):
+        self.assertGreater(compare_versions("1.2.0", "1.1.0"), 0)
+        self.assertEqual(compare_versions("1.2.0", "1.2.0"), 0)
+
+        state = get_update_state(current_version="1.1.0", latest_version="1.2.0")
+        self.assertTrue(state["available"])
+        self.assertEqual(state["current_version"], "1.1.0")
+        self.assertEqual(state["latest_version"], "1.2.0")
 
 
 @unittest.skipUnless(CatLogsApp is not None, "Tkinter not available in this environment")

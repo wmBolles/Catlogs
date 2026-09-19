@@ -33,6 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover - GUI-only environment
     filedialog = None
     messagebox = None
 
+from . import __version__
 from .safe_exec import build_command_preview_args
 from .models import CommandEntry
 from .collectors import collect_all
@@ -43,7 +44,7 @@ from .read_errors import load_read_errors, clear_read_errors
 from .log_parsers import LOG_FORMAT_CHOICES, detect_log_type, parse_log_file
 from .process_monitor import parse_process_snapshot
 from .scanner import create_scan_session, add_scan_finding, list_findings, scan_directory
-from .updater import check_for_update
+from .updater import check_for_update, fetch_latest_version, get_update_state, install_local_update
 
 
 class MultiSelectMenu(ttk.Button):
@@ -519,11 +520,12 @@ class CatLogsApp:
         ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
 
         dismiss_btn = tk.Label(
-            self._update_bar, text=" ",
+            self._update_bar, text="✕",
             bg=c.get("warning", "#d4a846"), fg="#000000",
-            font=(self.main_font, 12, "bold"), cursor="hand2"
+            font=(self.main_font, 12, "bold"), cursor="hand2",
+            bd=0, relief=tk.FLAT, padx=8, pady=2
         )
-        dismiss_btn.pack(side=tk.RIGHT, padx=8)
+        dismiss_btn.pack(side=tk.RIGHT, padx=(8, 12))
         dismiss_btn.bind("<Button-1>", lambda e: self._dismiss_update_bar())
 
     def _dismiss_update_bar(self):
@@ -531,6 +533,46 @@ class CatLogsApp:
         if self._update_bar:
             self._update_bar.destroy()
             self._update_bar = None
+
+    def _check_for_update_from_settings(self, status_var=None, latest_var=None):
+        """Perform a manual update check from the Settings dialog."""
+        if status_var is not None:
+            status_var.set("Checking latest release...")
+        if latest_var is not None:
+            latest_var.set("Checking...")
+
+        try:
+            latest = fetch_latest_version()
+            if latest is None:
+                if latest_var is not None:
+                    latest_var.set("Unavailable")
+                if status_var is not None:
+                    status_var.set("The update server could not be reached right now.")
+                return
+
+            if latest_var is not None:
+                latest_var.set(latest)
+
+            state = get_update_state(__version__, latest)
+            if state["available"]:
+                result = install_local_update(
+                    repo_root=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    base_url="https://catlogs.wassim.tech",
+                )
+                if status_var is not None:
+                    status_var.set(result.get("message", f"Update {latest} is available."))
+                if result.get("updated"):
+                    if latest_var is not None:
+                        latest_var.set(latest)
+                return
+
+            if status_var is not None:
+                status_var.set("You are already on the latest version available.")
+        except Exception as exc:  # pragma: no cover - GUI-specific error path
+            if latest_var is not None:
+                latest_var.set("Unavailable")
+            if status_var is not None:
+                status_var.set(f"Update check failed: {exc}")
 
     def _set_icon(self):
         icon_path = _get_icon_path()
@@ -3643,6 +3685,48 @@ Useful Resources & Documentation:"""
         lock_cb = ttk.Checkbutton(lock_hist_frame, text="Track screen lock/unlock, login and logout events in History",
                                   variable=self.screen_lock_history_var, command=save_lock_history_mode)
         lock_cb.pack(side=tk.LEFT)
+
+        update_row = ttk.Frame(sec_card, style="Toolbar.TFrame", padding=(12, 14, 12, 0))
+        update_row.pack(fill=tk.X, pady=(16, 0), anchor=tk.W)
+
+        update_label = ttk.Label(update_row, text="Software Update:", font=(self.main_font, 11, "bold"),
+                                 background=self.colors["bg_secondary"])
+        update_label.pack(anchor=tk.W)
+
+        update_box = ttk.Frame(sec_card, style="Toolbar.TFrame", padding=(12, 10, 12, 12))
+        update_box.pack(fill=tk.X, pady=(4, 0))
+
+        current_version_var = tk.StringVar(value=__import__("catlogs").__version__)
+        latest_version_var = tk.StringVar(value="Checking...")
+        update_status_var = tk.StringVar(value="Checking online release status...")
+
+        ttk.Label(update_box, text="Current:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Label(update_box, textvariable=current_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
+
+        ttk.Label(update_box, text="Latest:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(12, 8))
+        ttk.Label(update_box, textvariable=latest_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
+
+        ttk.Button(update_box, text="Check for Updates", command=lambda: self._check_for_update_from_settings(update_status_var, latest_version_var)).pack(side=tk.RIGHT)
+        ttk.Label(update_box, textvariable=update_status_var, font=(self.main_font, 9), foreground=self.colors["fg_dim"]).pack(side=tk.LEFT, padx=(18, 0), fill=tk.X, expand=True)
+
+        def load_update_status():
+            try:
+                latest = fetch_latest_version()
+                if latest is None:
+                    latest_version_var.set("Unavailable")
+                    update_status_var.set("Could not reach the update server. Retry later.")
+                    return
+                latest_version_var.set(latest)
+                state = get_update_state(__import__("catlogs").__version__, latest)
+                if state["available"]:
+                    update_status_var.set(f"Update available: {latest} is ready to install.")
+                else:
+                    update_status_var.set("You are on the latest available version.")
+            except Exception:
+                latest_version_var.set("Unavailable")
+                update_status_var.set("Update check failed. Please try again later.")
+
+        load_update_status()
 
         # # BOTTOM SAVE & CANCEL BAR
         # -------------------------------------------------------------------
