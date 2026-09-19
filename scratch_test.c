@@ -1,19 +1,23 @@
-/*
- * CatLogs
- * A local system logging and diagnostic tool.
- * Copyright (C) 2026 Wassim Bolles
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+const char *sec_key = "CatLogsSecKey123";
+int sec_key_len = 16;
+int global_offset = 0;
+
+int main() {
+    const char *buf = "[2026-09-19T20:12:38] --- CatLogs";
+    int len = strlen(buf);
+    char *enc = malloc(len + 1);
+    for (int i = 0; i < len; i++) {
+        enc[i] = buf[i] ^ sec_key[(global_offset + i) % sec_key_len];
+    }
+    enc[len] = '\0';
+    
+    printf("Original: %s\n", buf);
+    printf("Encrypted: ");
+    for(int i=0; i<len; i++) printf("%02x ", (unsigned char)enc[i]);
+    printf("\n");
+    return 0;
+}

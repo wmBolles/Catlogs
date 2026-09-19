@@ -953,6 +953,197 @@ def collect_cron_log(paths: Optional[List[str]] = None) -> List[CommandEntry]:
     return entries
 
 
+def collect_power_events() -> List[CommandEntry]:
+    """Collect power-on/power-off transitions and reboot records."""
+    entries: List[CommandEntry] = []
+    hostname = _get_hostname()
+    sources = [
+        "last -Faw -n 200",
+        "journalctl --no-pager -b -n 200 --output=short-iso",
+        "/var/log/syslog",
+        "/var/log/messages",
+        "/var/log/auth.log",
+    ]
+
+    for source in sources:
+        if source.startswith("last "):
+            result = _run_command(["last", "-Faw", "-n", "200"], timeout=10)
+            if not result:
+                continue
+            for line in result.strip().splitlines():
+                line = line.strip()
+                if not line or line.startswith("wtmp") or line.startswith("btmp"):
+                    continue
+                if "reboot" not in line.lower() and "shutdown" not in line.lower() and "power" not in line.lower():
+                    continue
+                try:
+                    timestamp = None
+                    match = re.search(r"(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})", line)
+                    if match:
+                        try:
+                            timestamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+                        except ValueError:
+                            pass
+                    if not timestamp:
+                        match = re.search(r"(\w{3}\s+\w{3}\s+\d+\s+[\d:]+)", line)
+                        if match:
+                            try:
+                                timestamp = datetime.strptime(f"{datetime.now().year} {match.group(1)}", "%Y %a %b %d %H:%M")
+                            except ValueError:
+                                pass
+                    entries.append(CommandEntry(
+                        timestamp=timestamp,
+                        user="root",
+                        command=line,
+                        shell="power",
+                        source="power",
+                        hostname=hostname,
+                    ))
+                except Exception:
+                    continue
+        elif source.startswith("journalctl "):
+            result = _run_command([
+                "journalctl", "--no-pager", "-b", "-n", "200", "--output=short-iso"
+            ], timeout=15)
+            if not result:
+                continue
+            for line in result.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                lowered = line.lower()
+                if "reboot" not in lowered and "shutdown" not in lowered and "power" not in lowered:
+                    continue
+                timestamp = None
+                try:
+                    timestamp = datetime.fromisoformat(line.split()[0])
+                except Exception:
+                    pass
+                entries.append(CommandEntry(
+                    timestamp=timestamp,
+                    user="root",
+                    command=line,
+                    shell="power",
+                    source="power",
+                    hostname=hostname,
+                ))
+        else:
+            expanded = os.path.expanduser(os.path.expandvars(source))
+            if not os.path.isfile(expanded) or not os.access(expanded, os.R_OK):
+                continue
+            with open(expanded, "r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    lowered = line.lower()
+                    if "reboot" not in lowered and "shutdown" not in lowered and "power" not in lowered:
+                        continue
+                    timestamp = None
+                    match = re.search(r"^(\w{3}\s+\d+\s+[\d:]+)", line)
+                    if match:
+                        try:
+                            timestamp = datetime.strptime(f"{datetime.now().year} {match.group(1)}", "%Y %b %d %H:%M:%S")
+                        except ValueError:
+                            pass
+                    entries.append(CommandEntry(
+                        timestamp=timestamp,
+                        user="root",
+                        command=line,
+                        shell="power",
+                        source="power",
+                        hostname=hostname,
+                    ))
+
+    deduped: List[CommandEntry] = []
+    seen = set()
+    for entry in entries:
+        normalized = " ".join(entry.command.strip().split()).lower()
+        key = (normalized, entry.shell.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+
+    return deduped
+
+
+def collect_session_lifecycle_events() -> List[CommandEntry]:
+    """Collect screen lock/unlock, login, and logout events from logind/systemd."""
+    entries: List[CommandEntry] = []
+    hostname = _get_hostname()
+    output = _run_command([
+        "journalctl", "--no-pager", "-n", "500", "--output=short-iso",
+        "-g", "session.*(logged out|locked|unlocked|login|log in|log out|New session)",
+        "--quiet",
+    ], timeout=20)
+
+    if not output:
+        output = _run_command([
+            "journalctl", "--no-pager", "-n", "500", "--output=short-iso",
+            "-t", "systemd-logind", "--quiet",
+        ], timeout=20)
+
+    if not output:
+        return entries
+
+    for line in output.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+
+        lower = line.lower()
+        if "session" not in lower and "lock" not in lower and "unlock" not in lower:
+            continue
+
+        match = re.match(r"^([\d\-T:+]+)\s+(\S+)\s+(.*)$", line)
+        if not match:
+            continue
+
+        ts_str, host, message = match.groups()
+        timestamp = None
+        try:
+            timestamp = datetime.fromisoformat(ts_str)
+            timestamp = timestamp.astimezone().replace(tzinfo=None)
+        except ValueError:
+            try:
+                timestamp = datetime.strptime(ts_str[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                timestamp = None
+
+        lower_msg = message.lower()
+        if "unlocked" in lower_msg:
+            command = "Screen unlock event"
+            shell = "screenlock"
+        elif "locked" in lower_msg:
+            command = "Screen lock event"
+            shell = "screenlock"
+        elif "logged out" in lower_msg or "log out" in lower_msg:
+            command = "User logout event"
+            shell = "login"
+        elif "new session" in lower_msg or ("session" in lower_msg and "user" in lower_msg):
+            command = "User login event"
+            shell = "login"
+        elif "session" in lower_msg:
+            command = message.strip()
+            shell = "login"
+        else:
+            command = message.strip()
+            shell = "screenlock"
+
+        entries.append(CommandEntry(
+            timestamp=timestamp,
+            user="root",
+            command=command,
+            shell=shell,
+            source="logind",
+            hostname=host or hostname,
+            extra={"raw_message": message.strip()},
+        ))
+
+    return entries
+
+
 def collect_boot_log(paths: Optional[List[str]] = None) -> List[CommandEntry]:
     from .log_parsers import read_log_file_lines
     entries = []
@@ -1235,12 +1426,14 @@ def collect_all(
     include_journal: bool = True,
     include_accounting: bool = True,
     include_logins: bool = True,
+    include_session_lifecycle: bool = True,
     include_syslog: bool = True,
     include_kernel: bool = True,
     include_dpkg: bool = True,
     include_apt: bool = True,
     include_cron: bool = True,
     include_boot: bool = True,
+    include_power: bool = True,
     include_daemon: bool = True,
     include_xorg: bool = True,
     include_dmesg: bool = True,
@@ -1307,6 +1500,8 @@ def collect_all(
         collectors.append(("Process Accounting", collect_accounting))
     if include_logins:
         collectors.append(("Login Sessions", collect_last_logins))
+    if include_session_lifecycle:
+        collectors.append(("Session Lifecycle", collect_session_lifecycle_events))
     if include_syslog:
         collectors.append(
             ("Syslog", lambda: collect_syslog(paths=syslog_paths)))
@@ -1325,6 +1520,9 @@ def collect_all(
     if include_boot:
         collectors.append(
             ("Boot Log", lambda: collect_boot_log(paths=boot_paths)))
+    if include_power:
+        collectors.append(
+            ("Power Events", collect_power_events))
     if include_daemon:
         collectors.append(
             ("Daemon Log", lambda: collect_daemon_log(paths=daemon_paths)))

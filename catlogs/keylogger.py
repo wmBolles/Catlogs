@@ -146,8 +146,24 @@ def is_running() -> bool:
     return get_daemon_pid() is not None
 
 
+def _systemd_user_available() -> bool:
+    """Return True when the current user session supports systemd user services."""
+    if shutil.which("systemctl") is None:
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "show-environment"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def start_daemon() -> Dict[str, Any]:
-    """Start the keylogger daemon."""
+    """Start the keylogger daemon in a way that survives GUI shutdown."""
     if is_running():
         return {"success": False, "message": "Daemon is already running."}
 
@@ -156,23 +172,47 @@ def start_daemon() -> Dict[str, Any]:
         if not result["success"]:
             return result
 
-    # Ensure log directory exists
     KEYLOGGER_DIR.mkdir(parents=True, exist_ok=True)
+
+    if _systemd_user_available() and SERVICE_FILE.exists():
+        try:
+            env = os.environ.copy()
+            if not env.get("DISPLAY"):
+                env["DISPLAY"] = os.environ.get("DISPLAY", ":0")
+            if not env.get("XAUTHORITY") and os.path.exists(os.path.expanduser("~/.Xauthority")):
+                env["XAUTHORITY"] = os.path.expanduser("~/.Xauthority")
+            result = subprocess.run(
+                ["systemctl", "--user", "start", SERVICE_NAME],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=15,
+            )
+            if result.returncode == 0:
+                time.sleep(0.6)
+                if is_running():
+                    pid = get_daemon_pid()
+                    return {"success": True, "message": f"Daemon started as a persistent systemd service (PID {pid})."}
+                return {"success": True, "message": "Systemd user service started; daemon should remain active after CatLogs closes."}
+        except Exception:
+            pass
 
     try:
         subprocess.Popen(
             [str(KEYLOGGER_BINARY), str(KEYLOGS_FILE), "--daemon"],
             start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
-        # Wait briefly for daemon to start and write PID
         time.sleep(0.5)
 
         if is_running():
             pid = get_daemon_pid()
             return {
                 "success": True,
-                "message": f"Daemon started (PID {pid}).",
+                "message": f"Daemon started in detached mode (PID {pid}).",
             }
         else:
             return {
@@ -294,8 +334,17 @@ def clear_keylogs() -> Dict[str, Any]:
         return {"success": True, "message": "Log file does not exist."}
 
     try:
+        # Stop daemon so it resets its global_offset when restarted
+        was_running = is_running()
+        if was_running:
+            stop_daemon()
+
         with open(str(KEYLOGS_FILE), "w") as f:
             f.truncate(0)
+
+        if was_running:
+            start_daemon()
+
         return {"success": True, "message": "Key logs cleared."}
     except Exception as e:
         return {"success": False, "message": f"Failed to clear logs: {e}"}
@@ -322,6 +371,7 @@ PIDFile={PID_FILE}
 Restart=on-failure
 RestartSec=5
 Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
 
 [Install]
 WantedBy=default.target

@@ -18,19 +18,106 @@
 import os
 import base64
 import hashlib
+import secrets
+from pathlib import Path
 
-SEC_KEY = b"CatLogsSecKey123"
+SECRET_ENV_VAR = "CATLOGS_SECRET_KEY"
+LEGACY_KEY = b"CatLogsSecKey123"
+KEY_PATH = Path.home() / ".config" / "catlogs" / "secret.key"
+
+
+def _ensure_key_dir() -> None:
+    KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(str(KEY_PATH.parent), 0o700)
+    except OSError:
+        pass
+
+
+def get_secret_key() -> bytes:
+    env_key = os.environ.get(SECRET_ENV_VAR)
+    if env_key and env_key.strip():
+        return env_key.strip().encode("utf-8")
+
+    if KEY_PATH.is_file():
+        try:
+            secret = KEY_PATH.read_text(encoding="utf-8").strip()
+            if secret:
+                os.environ[SECRET_ENV_VAR] = secret
+                return secret.encode("utf-8")
+        except OSError:
+            pass
+
+    secret = secrets.token_urlsafe(32)
+    _ensure_key_dir()
+    try:
+        KEY_PATH.write_text(secret, encoding="utf-8")
+        os.chmod(str(KEY_PATH), 0o600)
+    except OSError:
+        pass
+    os.environ[SECRET_ENV_VAR] = secret
+    return secret.encode("utf-8")
+
+
+SEC_KEY = get_secret_key()
+
+
+def _derive_keystream(data: bytes, salt: bytes) -> bytes:
+    key_material = hashlib.pbkdf2_hmac(
+        "sha256",
+        SEC_KEY,
+        salt,
+        100_000,
+        dklen=32,
+    )
+    out = bytearray()
+    for index in range(0, len(data), 32):
+        block = hashlib.sha256(key_material + index.to_bytes(4, "big") + salt).digest()
+        out.extend(block)
+    return bytes(out[:len(data)])
 
 
 def encrypt_data(data: bytes) -> bytes:
-    res = bytearray(len(data))
-    for i in range(len(data)):
-        res[i] = data[i] ^ SEC_KEY[i % len(SEC_KEY)]
-    return bytes(res)
+    if not data:
+        return b""
+    salt = secrets.token_bytes(16)
+    keystream = _derive_keystream(data, salt)
+    encrypted = bytes(a ^ b for a, b in zip(data, keystream))
+    prefix = b"v2:" + salt + b":"
+    return prefix + encrypted
 
 
 def decrypt_data(data: bytes) -> bytes:
-    return encrypt_data(data)  # XOR is symmetric
+    if not data:
+        return b""
+    if data.startswith(b"v2:"):
+        rest = data[3:]
+        salt, ciphertext = rest.split(b":", 1)
+        keystream = _derive_keystream(ciphertext, salt)
+        return bytes(a ^ b for a, b in zip(ciphertext, keystream))
+
+    candidates = []
+    env_key = os.environ.get(SECRET_ENV_VAR, "")
+    if env_key.strip():
+        candidates.append(env_key.strip().encode("utf-8"))
+    if SEC_KEY:
+        candidates.append(SEC_KEY)
+    candidates.append(LEGACY_KEY)
+    candidates = list(dict.fromkeys(candidates))
+
+    best = data
+    best_score = -1
+    for key in candidates:
+        if not key:
+            continue
+        decoded = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        printable = sum(32 <= c < 127 or c in (9, 10, 13) for c in decoded)
+        score = printable / max(1, len(decoded))
+        if score > best_score:
+            best = decoded
+            best_score = score
+
+    return best
 
 
 def encrypt_str(text: str) -> str:
@@ -48,6 +135,6 @@ def decrypt_str(b64_text: str) -> str:
 
 
 def get_encrypted_filename(original_name: str) -> str:
-    # Use sha256 to generate a consistent obscure filename
+    # Use sha256 to generate a consistent obscure filename.
     h = hashlib.sha256(original_name.encode('utf-8') + SEC_KEY).hexdigest()
     return f"{h[:16]}.dat"

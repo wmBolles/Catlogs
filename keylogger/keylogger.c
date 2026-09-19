@@ -41,14 +41,53 @@ char pid_file_path[4096] = {0};
 char last_window_name[1024] = {0};
 
 int global_offset = 0;
-const char *sec_key = "CatLogsSecKey123";
-int sec_key_len = 16;
+char sec_key[256] = {0};
+size_t sec_key_len = 0;
+
+static void
+load_secret_key (void)
+{
+    const char *env_key = getenv ("CATLOGS_SECRET_KEY");
+    if (env_key && env_key[0] != '\0')
+  {
+        snprintf (sec_key, sizeof (sec_key), "%s", env_key);
+        sec_key_len = strlen (sec_key);
+        return;
+    }
+
+    const char *home = getenv ("HOME");
+    if (home && home[0] != '\0')
+  {
+        char path[4096];
+        snprintf (path, sizeof (path), "%s/.config/catlogs/secret.key", home);
+        FILE *f = fopen (path, "r");
+        if (f)
+    {
+            if (fgets (sec_key, sizeof (sec_key), f) != NULL)
+      {
+                size_t len = strlen (sec_key);
+                while (len > 0 && (sec_key[len - 1] == '\n' || sec_key[len - 1] == '\r'))
+          {
+                    sec_key[--len] = '\0';
+                }
+                sec_key_len = len;
+            }
+            fclose (f);
+        }
+    }
+
+    if (sec_key_len == 0)
+  {
+        snprintf (sec_key, sizeof (sec_key), "CatLogsSecret-%d", getuid ());
+        sec_key_len = strlen (sec_key);
+    }
+}
 
 void
 secure_write (int fd, const char *buf, int len)
 {
-    if (len <= 0) return;
-    char *enc = malloc (len);
+    if (len <= 0 || sec_key_len == 0) return;
+    char *enc = malloc ((size_t) len);
     if (!enc) return;
     for (int i = 0; i < len; i++)
   {
@@ -359,6 +398,7 @@ unsigned char ok[32];
     }
 
     build_pid_path (log_path);
+    load_secret_key ();
 
     if (run_daemon)
   {

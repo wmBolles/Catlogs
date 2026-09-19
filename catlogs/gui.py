@@ -17,21 +17,32 @@
 
 import os
 import getpass
+import signal
 import subprocess
 import threading
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+except ModuleNotFoundError:  # pragma: no cover - GUI-only environment
+    tk = None
+    ttk = None
+    filedialog = None
+    messagebox = None
+
+from .safe_exec import build_command_preview_args
 from .models import CommandEntry
 from .collectors import collect_all
-from .exporter import export_to_csv, generate_default_filename
+from .exporter import export_to_csv, generate_default_filename, export_audit_report_pdf, generate_default_pdf_filename
 from .config import load_config, save_config, load_log_paths, save_log_paths, get_default_log_paths, check_path_status
 from .export_log import log_export, load_export_history, clear_export_history
 from .read_errors import load_read_errors, clear_read_errors
 from .log_parsers import LOG_FORMAT_CHOICES, detect_log_type, parse_log_file
+from .process_monitor import parse_process_snapshot
+from .scanner import create_scan_session, add_scan_finding, list_findings, scan_directory
 from .updater import check_for_update
 
 
@@ -179,7 +190,7 @@ THEMES = {
         "btn_bg":       "#404040",
         "btn_fg":       "#e0e0e0",
         "entry_bg":     "#383838",
-        "detail_bg":    "#2d2d2d",
+        "detail_bg":    "#000000",
         "nav_bg":       "#262626",
         "nav_active":   "#404040",
     },
@@ -449,6 +460,15 @@ class CatLogsApp:
         self._sort_column: Optional[str] = "timestamp"
         self._sort_reverse: bool = True
         self._current_page: str = "logs"
+        self._max_tabs = 0
+        self._custom_tab_pages = {}
+        self._custom_tab_order = []
+        self._custom_tab_buttons = {}
+        self._custom_tab_close_buttons = {}
+        self._header_plus_button = None
+        self._process_refresh_lock = False
+        self._last_process_rows_signature = None
+        self._last_system_summary = None
 
         self.config = load_config()
         self.current_theme = self.config.get("theme", "dark")
@@ -629,10 +649,21 @@ class CatLogsApp:
                   background=[("active", c["nav_active"])],
                   foreground=[("active", c["accent"])])
 
+        style.configure("TabPanel.TButton", background=c["bg_secondary"], foreground=c["fg"],
+                        font=(self.main_font, fs(10)), borderwidth=0, padding=(12, 8))
+        style.map("TabPanel.TButton",
+                  background=[("active", c["bg_table"])],
+                  foreground=[("active", c["accent"])])
+
         style.configure("NavActive.TButton", background=c["nav_active"], foreground=c["accent"],
                         font=(self.main_font, fs(10), "bold"), borderwidth=0, padding=(14, 8))
         style.map("NavActive.TButton",
                   background=[("active", c["nav_active"])])
+
+        style.configure("TabPanelActive.TButton", background=c["bg_table"], foreground=c["accent"],
+                        font=(self.main_font, fs(10), "bold"), borderwidth=0, padding=(12, 8))
+        style.map("TabPanelActive.TButton",
+                  background=[("active", c["bg_table"])])
 
         style.configure("TCombobox", fieldbackground=c["entry_bg"],
                         background=c["btn_bg"], foreground=c["fg"],
@@ -721,6 +752,25 @@ class CatLogsApp:
             "info", foreground=c["warning"], font=(self.mono_font, fs(10), "italic"))
         self.output_text.tag_raise("sel")
 
+        if hasattr(self, 'expected_output_text'):
+            self.expected_output_text.configure(
+                bg=c["detail_bg"], fg=c["fg"], font=(self.mono_font, fs(10)),
+                insertbackground=c["fg"],
+                selectbackground=c["accent"],
+                selectforeground="#000000"
+            )
+            self.expected_output_text.tag_configure(
+                "label", foreground=c["accent"], font=(self.mono_font, fs(11), "bold"))
+            self.expected_output_text.tag_configure(
+                "output", foreground=c["fg"], font=(self.mono_font, fs(10)))
+            self.expected_output_text.tag_configure(
+                "error", foreground=c["error"], font=(self.mono_font, fs(10)))
+            self.expected_output_text.tag_configure(
+                "placeholder", foreground=c["fg_dim"], font=(self.mono_font, fs(11), "italic"))
+            self.expected_output_text.tag_configure(
+                "info", foreground=c["warning"], font=(self.mono_font, fs(10), "italic"))
+            self.expected_output_text.tag_raise("sel")
+
         self.export_history_text.configure(
             bg=c["bg_table"], fg=c["fg"], font=(self.mono_font, fs(11)),
             insertbackground=c["fg"],
@@ -785,18 +835,20 @@ class CatLogsApp:
                                               font=(self.mono_font, fs(9), "italic"))
 
         if hasattr(self, 'kl_log_text'):
-            self.kl_log_text.configure(
-                bg=c["bg_table"], fg=c["fg"], font=(self.mono_font, fs(10)),
-                insertbackground=c["fg"],
-            )
-            self.kl_log_text.tag_configure("timestamp", foreground=c["accent"],
-                                           font=(self.mono_font, fs(10)))
-            self.kl_log_text.tag_configure("key", foreground=c["fg"],
-                                           font=(self.mono_font, fs(10)))
-            self.kl_log_text.tag_configure("marker", foreground=c.get("warning", "#d4a846"),
-                                           font=(self.mono_font, fs(10), "italic"))
-            self.kl_log_text.tag_configure("dim", foreground=c.get("fg_dim", "#999999"),
-                                           font=(self.mono_font, fs(10), "italic"))
+            for tw in (self.kl_log_text, getattr(self, 'kl_raw_text', None)):
+                if tw:
+                    tw.configure(
+                        bg=c["bg_table"], fg=c["fg"], font=(self.mono_font, fs(10)),
+                        insertbackground=c["fg"],
+                    )
+                    tw.tag_configure("timestamp", foreground=c["accent"],
+                                                   font=(self.mono_font, fs(10)))
+                    tw.tag_configure("key", foreground=c["fg"],
+                                                   font=(self.mono_font, fs(10)))
+                    tw.tag_configure("marker", foreground=c.get("warning", "#d4a846"),
+                                                   font=(self.mono_font, fs(10), "italic"))
+                    tw.tag_configure("dim", foreground=c.get("fg_dim", "#999999"),
+                                                   font=(self.mono_font, fs(10), "italic"))
 
         self.nav_frame.configure(style="Nav.TFrame")
         for btn_name, btn_widget in self._nav_buttons.items():
@@ -833,8 +885,27 @@ class CatLogsApp:
         self._build_table(paned)
         self._build_details(paned)
 
-        self.export_history_page = ttk.Frame(self.content_container)
+        self.processes_page = ttk.Frame(self.content_container)
+        self._build_processes_page(self.processes_page)
+
+        self.scanner_page = ttk.Frame(self.content_container)
+        self._build_scanner_page(self.scanner_page)
+
+        self.history_page = ttk.Frame(self.content_container)
+        self.history_notebook = ttk.Notebook(self.history_page)
+        self.history_notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.export_history_page = ttk.Frame(self.history_notebook)
         self._build_export_history_page(self.export_history_page)
+        self.history_notebook.add(self.export_history_page, text="Export History")
+
+        self.deletion_history_page = ttk.Frame(self.history_notebook)
+        self._build_deletion_history_page(self.deletion_history_page)
+        self.history_notebook.add(self.deletion_history_page, text="Deletion History")
+
+        self.lock_history_page = ttk.Frame(self.history_notebook)
+        self._build_lock_history_page(self.lock_history_page)
+        self.history_notebook.add(self.lock_history_page, text="Lock Screen History")
 
         self.read_errors_page = ttk.Frame(self.content_container)
         self._build_read_errors_page(self.read_errors_page)
@@ -844,9 +915,6 @@ class CatLogsApp:
 
         self.keylogger_page = ttk.Frame(self.content_container)
         self._build_keylogger_page(self.keylogger_page)
-
-        self.deletion_history_page = ttk.Frame(self.content_container)
-        self._build_deletion_history_page(self.deletion_history_page)
 
         self._build_status(main)
 
@@ -862,9 +930,6 @@ class CatLogsApp:
         if getattr(self, '_icon_photo_small', None):
             ttk.Label(inner, image=self._icon_photo_small,
                       style="Toolbar.TLabel").pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Button(inner, text="+", style="Icon.TButton", width=3,
-                   command=self._open_new_window).pack(side=tk.LEFT, padx=(4, 0))
 
         ttk.Button(inner, text="Settings", style="Icon.TButton",
                    command=self._show_settings).pack(side=tk.RIGHT, padx=(4, 0))
@@ -884,10 +949,11 @@ class CatLogsApp:
 
         pages = [
             ("logs", "Logs"),
-            ("export_history", "Export History"),
+            ("processes", "Process Monitor"),
+            ("scanner", "Scanner"),
+            ("history", "History"),
             ("read_errors", "Read Errors"),
             ("keylogger", "Key Logger"),
-            ("deletion_history", "Deletion History"),
             ("help", "Help"),
         ]
 
@@ -901,12 +967,18 @@ class CatLogsApp:
         self._current_page = page_id
 
         self.logs_page.pack_forget()
-        self.export_history_page.pack_forget()
+        self.processes_page.pack_forget()
+        self.scanner_page.pack_forget()
+        if hasattr(self, "history_page"):
+            self.history_page.pack_forget()
         self.read_errors_page.pack_forget()
         self.help_page.pack_forget()
         self.keylogger_page.pack_forget()
-        if hasattr(self, "deletion_history_page"):
-            self.deletion_history_page.pack_forget()
+        for custom_page in self._custom_tab_pages.values():
+            custom_page["frame"].pack_forget()
+        if hasattr(self, "processes_refresh_id") and self.processes_refresh_id is not None:
+            self.root.after_cancel(self.processes_refresh_id)
+            self.processes_refresh_id = None
 
         for btn_name, btn_widget in self._nav_buttons.items():
             if btn_name == page_id:
@@ -917,19 +989,26 @@ class CatLogsApp:
         if page_id == "logs":
             self.logs_page.pack(in_=self.content_container,
                                 fill=tk.BOTH, expand=True)
-        elif page_id == "export_history":
-            self.export_history_page.pack(
+        elif page_id == "processes":
+            self.processes_page.pack(in_=self.content_container,
+                                    fill=tk.BOTH, expand=True)
+            self._refresh_processes()
+            self._schedule_process_refresh()
+        elif page_id == "scanner":
+            self.scanner_page.pack(in_=self.content_container, fill=tk.BOTH, expand=True)
+            self._refresh_scanner_results()
+        elif page_id == "history":
+            self.history_page.pack(
                 in_=self.content_container, fill=tk.BOTH, expand=True)
             self._refresh_export_history()
+            self._refresh_deletion_history()
+            self._refresh_lock_history()
         elif page_id == "read_errors":
             self.read_errors_page.pack(
                 in_=self.content_container, fill=tk.BOTH, expand=True)
             self._refresh_read_errors()
         elif page_id == "keylogger":
             self.keylogger_page.pack(
-                in_=self.content_container, fill=tk.BOTH, expand=True)
-        elif page_id == "deletion_history":
-            self.deletion_history_page.pack(
                 in_=self.content_container, fill=tk.BOTH, expand=True)
             self._refresh_keylogger_page()
         elif page_id == "help":
@@ -1077,24 +1156,38 @@ class CatLogsApp:
         self.details_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         details_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        output_frame = ttk.Frame(split_pane)
-        split_pane.add(output_frame, weight=1)
+        self.output_notebook = ttk.Notebook(split_pane)
+        split_pane.add(self.output_notebook, weight=1)
 
-        output_label = ttk.Label(output_frame, text="Command Output",
-                                 font=(self.main_font, 10, "bold"))
-        output_label.pack(anchor=tk.W, padx=4, pady=(0, 2))
+        output_tab1 = ttk.Frame(self.output_notebook)
+        self.output_notebook.add(output_tab1, text="Command Output")
 
         self.output_text = tk.Text(
-            output_frame, wrap=tk.WORD, height=7, state=tk.DISABLED,
+            output_tab1, wrap=tk.WORD, height=7, state=tk.DISABLED,
             font=(self.mono_font, 10),
             borderwidth=0, padx=10, pady=8,
         )
-        output_scroll = ttk.Scrollbar(output_frame, orient=tk.VERTICAL,
+        output_scroll = ttk.Scrollbar(output_tab1, orient=tk.VERTICAL,
                                       command=self.output_text.yview)
         self.output_text.configure(yscrollcommand=output_scroll.set)
 
         self.output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         output_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        output_tab2 = ttk.Frame(self.output_notebook)
+        self.output_notebook.add(output_tab2, text="Expected Output")
+
+        self.expected_output_text = tk.Text(
+            output_tab2, wrap=tk.WORD, height=7, state=tk.DISABLED,
+            font=(self.mono_font, 10),
+            borderwidth=0, padx=10, pady=8,
+        )
+        expected_output_scroll = ttk.Scrollbar(output_tab2, orient=tk.VERTICAL,
+                                      command=self.expected_output_text.yview)
+        self.expected_output_text.configure(yscrollcommand=expected_output_scroll.set)
+
+        self.expected_output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        expected_output_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
     def _build_export_history_page(self, parent):
         header_frame = ttk.Frame(parent, style="Toolbar.TFrame")
@@ -1107,6 +1200,8 @@ class CatLogsApp:
                   style="Toolbar.TLabel",
                   font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
 
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_export_history_csv).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(inner, text="Refresh",
                    command=self._refresh_export_history).pack(side=tk.RIGHT, padx=(6, 0))
 
@@ -1138,6 +1233,8 @@ class CatLogsApp:
                   style="Toolbar.TLabel",
                   font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
 
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_read_errors_csv).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(inner, text="Clear Errors",
                    command=self._clear_read_errors).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(inner, text="Refresh",
@@ -1171,6 +1268,8 @@ class CatLogsApp:
                   style="Toolbar.TLabel",
                   font=(self.main_font, fs(14) if 'fs' in globals() else 14, "bold")).pack(side=tk.LEFT)
 
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_deletion_history_csv).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(inner, text="Refresh",
                    command=self._refresh_deletion_history).pack(side=tk.RIGHT, padx=(6, 0))
 
@@ -1211,6 +1310,58 @@ class CatLogsApp:
                 entry.get("item_type", "Unknown"),
                 entry.get("detail", ""),
                 "Yes" if entry.get("allowed") else "NO"
+            ))
+
+    def _build_lock_history_page(self, parent):
+        header_frame = ttk.Frame(parent, style="Toolbar.TFrame")
+        header_frame.pack(fill=tk.X)
+
+        inner = ttk.Frame(header_frame, style="Toolbar.TFrame")
+        inner.pack(fill=tk.X, padx=14, pady=10)
+
+        ttk.Label(inner, text="Lock Screen History",
+                  style="Toolbar.TLabel",
+                  font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
+
+        ttk.Button(inner, text="Refresh",
+                   command=self._refresh_lock_history).pack(side=tk.RIGHT, padx=(6, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X)
+
+        self.lock_history_tree = ttk.Treeview(parent, columns=(
+            "timestamp", "event", "details"), show="headings")
+        self.lock_history_tree.heading("timestamp", text="Time")
+        self.lock_history_tree.heading("event", text="Event")
+        self.lock_history_tree.heading("details", text="Details")
+
+        self.lock_history_tree.column("timestamp", width=180)
+        self.lock_history_tree.column("event", width=180)
+        self.lock_history_tree.column("details", width=500)
+
+        vsb = ttk.Scrollbar(parent, orient=tk.VERTICAL,
+                            command=self.lock_history_tree.yview)
+        self.lock_history_tree.configure(yscrollcommand=vsb.set)
+
+        self.lock_history_tree.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=10)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
+
+    def _refresh_lock_history(self):
+        for item in self.lock_history_tree.get_children():
+            self.lock_history_tree.delete(item)
+
+        entries = []
+        try:
+            from .collectors import collect_session_lifecycle_events
+            entries = collect_session_lifecycle_events()
+        except Exception:
+            entries = []
+
+        for entry in sorted(entries, key=lambda e: (e.timestamp or datetime.min, str(e.command))):
+            self.lock_history_tree.insert("", "end", values=(
+                (entry.timestamp or datetime.min).strftime("%Y-%m-%d %H:%M:%S") if entry.timestamp else "Unknown",
+                str(entry.command or "Session Event"),
+                str(entry.source or "logind")
             ))
 
     def _build_help_page(self, parent):
@@ -1262,9 +1413,11 @@ For full documentation and a user guide, visit our website:
 
 Pages:
 * Logs: The main interface displaying commands and logs. Click on any row to view its full details and related system context in the panel below.
+* Process Monitor: Live process explorer with CPU, memory, state, TTY, parent info, daemon summaries, and one-click termination controls.
 * Export History: A read-only record of all data exports you've made to CSV.
 * Read Errors: Displays logs or files the application didn't have permission to read.
 * Key Logger: Monitor keyboard input via an opt-in daemon. Start/stop the daemon, view key logs, install auto-start service for reboot persistence.
+* Deletion History: Review a history of logs that have been deleted.
 * Help: This documentation page.
 
 Filtering Data:
@@ -1273,16 +1426,19 @@ Use the top toolbar to filter logs:
 * Exclude Menus: Click on the User, Shell, or Source buttons to open a dropdown of checkboxes. Checking an item excludes it from the results. You can use 'Exclude All' and 'Clear Exclusions' for rapid filtering.
 * From / To: Filter by date. Use format YYYY-MM-DD or YYYY-MM-DD HH:MM:SS.
 
-Exporting:
-Click the 'Export CSV' button to save your current filtered view to a spreadsheet. The export contains metadata about your filters and the software version.
+Exporting & Managing:
+* Export CSV: Click the 'Export CSV' button to save your current filtered view to a spreadsheet. The export contains metadata about your filters and the software version.
+* Delete Logs: Right-click on a log entry to delete it, unless Protection Mode is enabled.
 
 Settings & Log File Paths:
 Click the Settings icon in the top right (or press Ctrl+,) to open Settings:
 * [File] Log File Paths: View all system and user log files monitored by CatLogs. You can add any custom log file path on your machine with auto-detection for Syslog, Auth/Sudo, Web Servers (Nginx/Apache), JSON Lines, Application logs, DPKG, Auditd, Database logs, etc., test/preview the format before adding, toggle active state, or delete unwanted paths.
 * [Art] Appearance: Switch between color themes (Dark, Light, Dracula, Monokai, Nord, Cappuccino) and customize Main and Monospace fonts.
+* Security: Configure Protection Mode to prevent unauthorized or accidental log deletion.
 
 Keyboard Shortcuts:
 * F5 / Ctrl+R: Refresh data
+* F11: Toggle fullscreen
 * Ctrl+E: Export to CSV
 * Ctrl+,: Open Settings & Log Paths
 * Esc: Clear all filters
@@ -1311,6 +1467,812 @@ Keyboard Shortcuts:
 
         self.help_text.configure(state=tk.DISABLED)
 
+    def _build_processes_page(self, parent):
+        self.processes_auto_refresh = tk.BooleanVar(value=True)
+        self.processes_refresh_id = None
+
+        header_frame = ttk.Frame(parent, style="Toolbar.TFrame")
+        header_frame.pack(fill=tk.X)
+
+        inner = ttk.Frame(header_frame, style="Toolbar.TFrame")
+        inner.pack(fill=tk.X, padx=14, pady=10)
+
+        ttk.Label(inner, text="Process Monitor",
+                  style="Toolbar.TLabel",
+                  font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
+
+        ttk.Button(inner, text="Help", width=6,
+                   command=self._show_process_help).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_processes_csv).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(inner, text="Refresh",
+                   command=self._refresh_processes).pack(side=tk.RIGHT, padx=(0, 6))
+        ttk.Button(inner, text="Kill Selected",
+                   command=self._kill_selected_process).pack(side=tk.RIGHT, padx=(0, 6))
+
+        toolbar = ttk.Frame(parent, style="Toolbar.TFrame")
+        toolbar.pack(fill=tk.X, padx=10, pady=(0, 6))
+
+        ttk.Label(toolbar, text="Filter:", style="Toolbar.TLabel").pack(side=tk.LEFT, padx=(0, 6))
+        self.processes_search_var = tk.StringVar()
+        self.processes_search_var.trace_add("write", lambda *_: self._filter_processes_table())
+        ttk.Entry(toolbar, textvariable=self.processes_search_var, width=28).pack(side=tk.LEFT)
+        ttk.Checkbutton(toolbar, text="Auto refresh", variable=self.processes_auto_refresh,
+                        command=self._toggle_process_auto_refresh).pack(side=tk.RIGHT, padx=(0, 8))
+        self.processes_summary_var = tk.StringVar(value="Loading processes...")
+        ttk.Label(toolbar, textvariable=self.processes_summary_var, style="Toolbar.TLabel").pack(side=tk.RIGHT)
+
+        layout = ttk.Frame(parent)
+        layout.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        layout.grid_rowconfigure(0, weight=4)
+        layout.grid_rowconfigure(1, weight=2)
+        layout.grid_columnconfigure(0, weight=1)
+
+        tree_frame = ttk.Frame(layout)
+        tree_frame.grid(row=0, column=0, sticky="nsew")
+
+        columns = ("pid", "user", "cpu", "mem", "state", "tty", "ppid", "elapsed", "command")
+        self.processes_tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="tree headings",
+            selectmode="browse",
+            height=12,
+        )
+        self.processes_tree.heading("#0", text="Name")
+        self.processes_tree.heading("pid", text="PID")
+        self.processes_tree.heading("user", text="User")
+        self.processes_tree.heading("cpu", text="CPU %")
+        self.processes_tree.heading("mem", text="MEM %")
+        self.processes_tree.heading("state", text="State")
+        self.processes_tree.heading("tty", text="TTY")
+        self.processes_tree.heading("ppid", text="PPID")
+        self.processes_tree.heading("elapsed", text="Elapsed")
+        self.processes_tree.heading("command", text="Command")
+
+        self.processes_tree.column("#0", width=180, stretch=tk.YES)
+        self.processes_tree.column("pid", width=70, anchor=tk.CENTER)
+        self.processes_tree.column("user", width=90)
+        self.processes_tree.column("cpu", width=90, anchor=tk.CENTER)
+        self.processes_tree.column("mem", width=90, anchor=tk.CENTER)
+        self.processes_tree.column("state", width=90, anchor=tk.CENTER)
+        self.processes_tree.column("tty", width=90, anchor=tk.CENTER)
+        self.processes_tree.column("ppid", width=80, anchor=tk.CENTER)
+        self.processes_tree.column("elapsed", width=150)
+        self.processes_tree.column("command", width=500, stretch=tk.YES)
+
+        yscroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.processes_tree.yview)
+        xscroll = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.processes_tree.xview)
+        self.processes_tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.processes_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.processes_tree.bind("<<TreeviewSelect>>", self._show_selected_process_details)
+
+        bottom_container = ttk.Frame(layout)
+        bottom_container.grid(row=1, column=0, sticky="nsew")
+
+        details_frame = ttk.Frame(bottom_container, padding=(0, 8, 0, 0))
+        details_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        ttk.Label(details_frame, text="Selected process", style="Toolbar.TLabel").pack(anchor=tk.W)
+        self.processes_details = tk.Text(
+            details_frame,
+            height=6,
+            wrap=tk.WORD,
+            state=tk.NORMAL,
+            bg="#000000",
+            fg=self.colors["fg"],
+            font=(self.main_font, 10),
+            borderwidth=0,
+            padx=8,
+            pady=8,
+        )
+        self.processes_details.pack(fill=tk.BOTH, expand=True)
+        self.processes_details.configure(state=tk.DISABLED)
+
+        summary_frame = ttk.Frame(bottom_container, padding=(12, 8, 0, 0), width=420)
+        summary_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        summary_frame.pack_propagate(False)
+        ttk.Label(summary_frame, text="System summary", style="Toolbar.TLabel").pack(anchor=tk.W)
+
+        self.system_summary_text = tk.Text(
+            summary_frame,
+            height=9,
+            wrap=tk.WORD,
+            state=tk.NORMAL,
+            bg="#000000",
+            fg=self.colors["fg"],
+            font=(self.mono_font, 10),
+            borderwidth=0,
+            padx=8,
+            pady=8,
+        )
+        self.system_summary_text.pack(fill=tk.BOTH, expand=True)
+        self.system_summary_text.configure(state=tk.DISABLED)
+
+        self._refresh_system_summary()
+
+        self._refresh_processes()
+
+    def _build_scanner_page(self, parent):
+        header = ttk.Frame(parent, style="Toolbar.TFrame")
+        header.pack(fill=tk.X)
+
+        inner = ttk.Frame(header, style="Toolbar.TFrame")
+        inner.pack(fill=tk.X, padx=14, pady=10)
+
+        ttk.Label(inner, text="Scanner",
+                  style="Toolbar.TLabel",
+                  font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
+
+        ttk.Button(inner, text="Export PDF Audit",
+                   command=self._export_scanner_pdf).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(inner, text="Scan Folder",
+                   command=self._run_scanner).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(inner, text="Choose Folder",
+                   command=self._choose_scanner_directory).pack(side=tk.RIGHT, padx=(6, 0))
+
+        toolbar = ttk.Frame(parent, style="Toolbar.TFrame")
+        toolbar.pack(fill=tk.X, padx=10, pady=(0, 6))
+
+        ttk.Label(toolbar, text="Target:", style="Toolbar.TLabel").pack(side=tk.LEFT, padx=(0, 6))
+        self.scanner_target_var = tk.StringVar(value=os.path.expanduser("~/"))
+        ttk.Entry(toolbar, textvariable=self.scanner_target_var, width=50).pack(side=tk.LEFT)
+
+        content = ttk.Frame(parent)
+        content.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        content.grid_rowconfigure(0, weight=1)
+        content.grid_columnconfigure(0, weight=1)
+
+        self.scanner_text = tk.Text(
+            content,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            bg="#000000",
+            fg=self.colors["fg"],
+            font=(self.mono_font, 10),
+            borderwidth=0,
+            padx=10,
+            pady=10,
+        )
+        scrollbar = ttk.Scrollbar(content, orient=tk.VERTICAL, command=self.scanner_text.yview)
+        self.scanner_text.configure(yscrollcommand=scrollbar.set)
+        self.scanner_text.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.scanner_summary_var = tk.StringVar(value="No scan yet.")
+        self.scanner_summary_label = ttk.Label(
+            parent,
+            textvariable=self.scanner_summary_var,
+            style="Toolbar.TLabel",
+            font=(self.main_font, 10)
+        )
+        self.scanner_summary_label.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+    def _choose_scanner_directory(self):
+        if filedialog is None:
+            return
+        selected = filedialog.askdirectory(title="Choose a folder to scan")
+        if selected:
+            self.scanner_target_var.set(selected)
+
+    def _run_scanner(self):
+        target = self.scanner_target_var.get().strip()
+        if not target:
+            target = os.path.expanduser("~")
+        if not os.path.exists(target):
+            messagebox.showerror("Scanner", f"Target path does not exist: {target}")
+            return
+
+        self.scanner_summary_var.set("Scanning…")
+        self.scanner_text.configure(state=tk.NORMAL)
+        self.scanner_text.delete("1.0", tk.END)
+        self.scanner_text.insert(tk.END, f"Scanning {target}...\n\n")
+        self.scanner_text.configure(state=tk.DISABLED)
+
+        def worker():
+            session = create_scan_session(
+                name=f"Directory scan: {os.path.basename(target) or target}",
+                target=target,
+                mode="unprivileged",
+                status="running",
+            )
+            result = scan_directory(target, max_depth=2, max_files=500)
+            for finding in result.get("findings", []):
+                add_scan_finding(
+                    session_id=session["id"],
+                    rule_name=finding["rule_name"],
+                    severity=finding["severity"],
+                    path=finding["path"],
+                    summary=finding["summary"],
+                    details=finding["details"],
+                )
+            self.root.after(0, lambda: self._apply_scanner_result(result, session))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _export_scanner_pdf(self):
+        target = self.scanner_target_var.get().strip() or os.path.expanduser("~")
+        if not os.path.exists(target):
+            messagebox.showerror("Scanner", f"Target path does not exist: {target}")
+            return
+
+        findings = list_findings()[:50]
+        if not findings:
+            messagebox.showinfo("Audit Report", "No findings are available to export yet. Run a scan first.")
+            return
+
+        default_name = generate_default_pdf_filename()
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            initialfile=default_name,
+            title="Export Scanner Audit Report as PDF",
+        )
+        if not filepath:
+            return
+
+        try:
+            count = export_audit_report_pdf(
+                target=target,
+                findings=findings,
+                filepath=filepath,
+                generated_at=datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            messagebox.showinfo(
+                "PDF Export Successful",
+                f"Exported {count} findings to:\n{filepath}",
+            )
+        except Exception as exc:  # pragma: no cover - GUI only
+            messagebox.showerror("PDF Export Error", f"Failed to export PDF:\n{exc}")
+
+    def _apply_scanner_result(self, result, session):
+        findings = result.get("findings", [])
+        self.scanner_summary_var.set(
+            f"Scanned {result.get('files_scanned', 0)} files • {len(findings)} findings"
+        )
+        self.scanner_text.configure(state=tk.NORMAL)
+        self.scanner_text.delete("1.0", tk.END)
+        self.scanner_text.insert(tk.END, f"Scan target: {result.get('directory', '')}\n")
+        self.scanner_text.insert(tk.END, f"Files scanned: {result.get('files_scanned', 0)}\n")
+        self.scanner_text.insert(tk.END, f"Session ID: {session['id']}\n\n")
+        if not findings:
+            self.scanner_text.insert(tk.END, "No suspicious files found in the selected target.\n")
+        else:
+            self.scanner_text.insert(tk.END, "Findings:\n")
+            for idx, finding in enumerate(findings, 1):
+                self.scanner_text.insert(
+                    tk.END,
+                    f"[{idx}] {finding['severity'].upper()} • {finding['rule_name']}\n"
+                )
+                self.scanner_text.insert(tk.END, f"Path: {finding['path']}\n")
+                self.scanner_text.insert(tk.END, f"Summary: {finding['summary']}\n")
+                self.scanner_text.insert(tk.END, f"Details: {finding['details']}\n\n")
+        self.scanner_text.configure(state=tk.DISABLED)
+
+    def _refresh_scanner_results(self):
+        session_rows = list_findings()
+        if not session_rows:
+            self.scanner_text.configure(state=tk.NORMAL)
+            self.scanner_text.delete("1.0", tk.END)
+            self.scanner_text.insert(tk.END, "Scanner is ready. Choose a folder and run a scan.\n")
+            self.scanner_text.configure(state=tk.DISABLED)
+            self.scanner_summary_var.set("No scan history yet.")
+            return
+
+        history_text = []
+        for item in session_rows[:8]:
+            history_text.append(f"[{item['created_at']}] {item['rule_name']} | {item['severity']} | {item['path']}")
+        self.scanner_text.configure(state=tk.NORMAL)
+        self.scanner_text.delete("1.0", tk.END)
+        self.scanner_text.insert(tk.END, "\n".join(history_text) + "\n")
+        self.scanner_text.configure(state=tk.DISABLED)
+        self.scanner_summary_var.set(f"{len(session_rows)} findings in local history")
+
+    def _show_process_help(self):
+        if getattr(self, '_proc_help_dialog', None) and self._proc_help_dialog.winfo_exists():
+            self._proc_help_dialog.lift()
+            return
+
+        dialog = tk.Toplevel(self.root)
+        self._proc_help_dialog = dialog
+        dialog.title("Process Monitor Help")
+        dialog.transient(self.root)
+        dialog.geometry("700x500")
+        
+        main_frame = ttk.Frame(dialog, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text="Understanding Processes & Daemons", font=(self.main_font, 14, "bold")).pack(anchor=tk.W, pady=(0, 10))
+        
+        content = tk.Text(main_frame, wrap=tk.WORD, font=(self.main_font, 10), borderwidth=0, bg=self.colors["bg_table"], fg=self.colors["fg"])
+        
+        scroll = ttk.Scrollbar(main_frame, command=content.yview)
+        content.configure(yscrollcommand=scroll.set)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        text = """The Process Monitor displays a real-time snapshot of currently running processes (programs) and daemons (background services) on your system.
+
+Key Columns:
+• PID (Process ID): The unique number assigned by the OS to identify the process.
+• PPID (Parent Process ID): The PID of the process that started this process.
+• CPU % & MEM %: The percentage of system resources currently consumed.
+• State: The current state of the process (e.g., R for running, S for sleeping, Z for zombie).
+• TTY: The terminal associated with the process, if any.
+• Elapsed: How long the process has been running.
+• Command: The exact command line used to launch the process.
+
+Daemons vs User Processes:
+Daemons (often ending in 'd', like 'systemd' or 'sshd') are background services that manage system components and run independently of user sessions. User processes are applications launched by logged-in users.
+
+Useful Resources & Documentation:"""
+        
+        content.insert(tk.END, text + "\n\n")
+        
+        links = [
+            ("• Linux Process Management Guide", "https://tldp.org/LDP/sag/html/processes.html"),
+            ("• Understanding 'ps' Output", "https://man7.org/linux/man-pages/man1/ps.1.html"),
+            ("• What is a Daemon?", "https://en.wikipedia.org/wiki/Daemon_(computing)")
+        ]
+        
+        for name, url in links:
+            content.insert(tk.END, name + "\n", ("link", url))
+            
+        def open_url(event):
+            try:
+                idx = content.index(f"@{event.x},{event.y}")
+                tags = content.tag_names(idx)
+                for tag in tags:
+                    if tag.startswith("http"):
+                        import webbrowser
+                        webbrowser.open(tag)
+                        break
+            except Exception:
+                pass
+                
+        content.tag_config("link", foreground="#3584e4", underline=True)
+        content.tag_bind("link", "<Button-1>", open_url)
+        content.tag_bind("link", "<Enter>", lambda e: content.config(cursor="hand2"))
+        content.tag_bind("link", "<Leave>", lambda e: content.config(cursor=""))
+        
+        content.configure(state=tk.DISABLED)
+
+    def _toggle_process_auto_refresh(self):
+        if self.processes_auto_refresh.get():
+            self._schedule_process_refresh()
+        else:
+            if self.processes_refresh_id is not None:
+                self.root.after_cancel(self.processes_refresh_id)
+                self.processes_refresh_id = None
+
+    def _schedule_process_refresh(self):
+        if not self.processes_auto_refresh.get():
+            return
+        if self.processes_refresh_id is not None:
+            self.root.after_cancel(self.processes_refresh_id)
+        self.processes_refresh_id = self.root.after(5000, self._auto_refresh_processes)
+
+    def _auto_refresh_processes(self):
+        self.processes_refresh_id = None
+        if self._current_page == "processes" and self.processes_auto_refresh.get():
+            self._refresh_processes()
+            self._schedule_process_refresh()
+
+    def _refresh_processes(self):
+        if self._process_refresh_lock:
+            return
+        self._process_refresh_lock = True
+        self.processes_summary_var.set("Refreshing process list...")
+
+        def worker():
+            try:
+                result = subprocess.run(
+                    [
+                        "ps",
+                        "-eo",
+                        "pid,ppid,user,comm,pcpu,pmem,stat,tty,etime,args",
+                        "--no-headers",
+                        "--sort=-pcpu,-pmem",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except Exception as exc:
+                self.root.after(0, lambda: self._apply_process_refresh_result(None, f"Unable to read process list: {exc}"))
+                return
+
+            rows = parse_process_snapshot(result.stdout or "")
+            signature = tuple(
+                (
+                    str(row.get("pid", "")),
+                    str(row.get("ppid", "")),
+                    str(row.get("user", "")),
+                    str(row.get("name", "")),
+                    str(row.get("cpu", "")),
+                    str(row.get("mem", "")),
+                    str(row.get("state", "")),
+                    str(row.get("tty", "")),
+                    str(row.get("elapsed", "")),
+                    str(row.get("command", "")),
+                )
+                for row in rows
+            )
+            self.root.after(0, lambda rows=rows, signature=signature: self._apply_process_refresh_result(rows, None, signature))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_process_refresh_result(self, rows, error_message, signature=None):
+        self._process_refresh_lock = False
+        if error_message:
+            self.processes_summary_var.set(error_message)
+            return
+
+        current_filter = self.processes_search_var.get().strip().lower()
+        if signature is None:
+            signature = self._last_process_rows_signature
+
+        if (not current_filter and signature == self._last_process_rows_signature and self.processes_tree.get_children() and rows):
+            self.processes_summary_var.set(f"{len(rows)} processes • process snapshot unchanged")
+            return
+
+        self._last_process_rows_signature = signature
+
+        for child in self.processes_tree.get_children():
+            self.processes_tree.delete(child)
+
+        if not rows:
+            self.processes_summary_var.set("No running processes found")
+            self.processes_details.configure(state=tk.NORMAL)
+            self.processes_details.delete("1.0", tk.END)
+            self.processes_details.insert(tk.END, "No process data available.\n")
+            self.processes_details.configure(state=tk.DISABLED)
+            return
+
+        daemon_count = sum(1 for row in rows if row["ppid"] == 1 or row["user"] == "root")
+        top_cpu = max(float(row["cpu"]) for row in rows)
+        self.processes_summary_var.set(f"{len(rows)} processes • {daemon_count} daemons • top CPU {top_cpu:.1f}%")
+
+        pid_map = {row["pid"]: row for row in rows}
+        children_map = {}
+        for row in rows:
+            children_map.setdefault(row["ppid"], []).append(row)
+
+        inserted = set()
+
+        def insert_tree(pid, parent_iid=""):
+            if pid in inserted:
+                return
+            row = pid_map.get(pid)
+            if row is None:
+                return
+
+            filtered = self.processes_search_var.get().strip().lower()
+            if filtered:
+                haystack = " ".join([
+                    str(row["pid"]), row["user"], row["name"], row["command"], row["tty"], row["state"]
+                ]).lower()
+                if filtered not in haystack:
+                    return
+
+            values = (
+                row["pid"],
+                row["user"],
+                row["cpu"],
+                row["mem"],
+                row["state"],
+                row["tty"],
+                row["ppid"],
+                row["started"],
+                row["command"],
+            )
+            node_id = self.processes_tree.insert(parent_iid, tk.END, iid=str(pid), text=row["name"], values=values, open=True)
+            inserted.add(pid)
+
+            children = sorted(children_map.get(pid, []), key=lambda r: (-(float(r["cpu"])), -(float(r["mem"])), r["pid"]))
+            for child in children:
+                if child["pid"] != pid:
+                    insert_tree(child["pid"], node_id)
+
+        roots = []
+        for row in rows:
+            if row["pid"] == 1 or row["ppid"] == 1 or row["ppid"] not in pid_map or row["ppid"] == 0:
+                roots.append(row["pid"])
+        roots = sorted(set(roots), key=lambda pid: (pid != 1, pid))
+        if not roots:
+            roots = [min(pid_map)]
+
+        for root_pid in roots:
+            insert_tree(root_pid)
+
+        if self.processes_tree.get_children():
+            first = self.processes_tree.get_children()[0]
+            self.processes_tree.selection_set(first)
+            self._show_selected_process_details()
+
+    def _refresh_system_summary(self):
+        try:
+            load_avg = subprocess.run(["uptime"], capture_output=True, text=True, timeout=4, check=False)
+            mem_info = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=4, check=False)
+            proc_info = subprocess.run(["ps", "-eo", "comm", "--no-headers"], capture_output=True, text=True, timeout=4, check=False)
+        except Exception:
+            return
+
+        total_tasks = 0
+        running_tasks = 0
+        if proc_info.returncode == 0:
+            total_tasks = sum(1 for line in proc_info.stdout.splitlines() if line.strip())
+            running_tasks = sum(1 for line in proc_info.stdout.splitlines() if line.strip() and line.strip() == "")
+
+        load_text = load_avg.stdout.strip() if load_avg.returncode == 0 else "load average unavailable"
+        load_text = load_text.replace("up ", "").replace("users", "users")
+
+        mem_total = 0
+        mem_used = 0
+        swap_total = 0
+        swap_used = 0
+        if mem_info.returncode == 0:
+            lines = mem_info.stdout.splitlines()
+            for line in lines:
+                if line.startswith("Mem:"):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        mem_total = int(parts[1])
+                        mem_used = int(parts[2])
+                elif line.startswith("Swap:"):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        swap_total = int(parts[1])
+                        swap_used = int(parts[2])
+
+        uptime_text = ""
+        if load_avg.returncode == 0:
+            uptime_text = load_avg.stdout.strip().split("up ", 1)[1].split(",", 1)[0] if " up " in load_avg.stdout else "uptime unavailable"
+
+        summary = (
+            f"Tasks: {total_tasks} total, {running_tasks or '0'} running\n"
+            f"Load average: {load_text.split('load average:')[-1].strip() if 'load average:' in load_text.lower() else load_text}\n"
+            f"Uptime: {uptime_text}\n"
+            f"Mem: {mem_used}/{mem_total} MB\n"
+            f"Swap: {swap_used}/{swap_total} MB\n"
+        )
+        if summary == self._last_system_summary:
+            return
+        self._last_system_summary = summary
+        self.system_summary_text.configure(state=tk.NORMAL)
+        self.system_summary_text.delete("1.0", tk.END)
+        self.system_summary_text.insert(tk.END, summary)
+        self.system_summary_text.configure(state=tk.DISABLED)
+
+    def _filter_processes_table(self):
+        self._refresh_processes()
+
+    def _show_selected_process_details(self, event=None):
+        selection = self.processes_tree.selection()
+        if not selection:
+            return
+        item = self.processes_tree.item(selection[0])
+        values = item.get("values", "")
+        name = item.get("text", "")
+        if not values:
+            return
+        pid, user, cpu, mem, state, tty, ppid, elapsed, command = values
+        self.processes_details.configure(state=tk.NORMAL)
+        self.processes_details.delete("1.0", tk.END)
+        details = (
+            f"PID: {pid}\n"
+            f"User: {user}\n"
+            f"Name: {name}\n"
+            f"PPID: {ppid}\n"
+            f"CPU: {cpu}%\n"
+            f"Memory: {mem}%\n"
+            f"State: {state}\n"
+            f"TTY: {tty}\n"
+            f"Elapsed: {elapsed}\n"
+            f"Command: {command}\n"
+        )
+        self.processes_details.insert(tk.END, details)
+        self.processes_details.configure(state=tk.DISABLED)
+
+    def _prompt_signal_selection(self, pid: int, name: str):
+        if messagebox is None:
+            return signal.SIGTERM
+
+        choices = {
+            "TERM": signal.SIGTERM,
+            "INT": signal.SIGINT,
+            "KILL": signal.SIGKILL,
+            "QUIT": signal.SIGQUIT,
+            "HUP": signal.SIGHUP,
+            "STOP": signal.SIGSTOP,
+            "CONT": signal.SIGCONT,
+            "USR1": signal.SIGUSR1,
+            "USR2": signal.SIGUSR2,
+        }
+
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.attributes("-topmost", True)
+        dialog.minsize(500, 420)
+        dialog.configure(bg="#1c1f22")
+        dialog.resizable(False, False)
+
+        width = 500
+        height = 440
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        header = tk.Frame(dialog, bg="#2b2f33", height=52)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+
+        title = tk.Label(header, text="CatLogs", bg="#2b2f33", fg="#f0f0f0",
+                         font=(self.main_font, 20, "bold"), anchor="w")
+        title.pack(side=tk.LEFT, padx=(18, 0), pady=(8, 0), fill=tk.X, expand=True)
+
+        close_btn = tk.Button(
+            header,
+            text="×",
+            bg="#2b2f33",
+            fg="#f0f0f0",
+            activebackground="#3a3f45",
+            activeforeground="#ffffff",
+            command=dialog.destroy,
+            bd=0,
+            padx=14,
+            pady=4,
+            font=(self.main_font, 20, "bold"),
+        )
+        close_btn.pack(side=tk.RIGHT, padx=(0, 12))
+
+        body = tk.Frame(dialog, bg="#dfe1e2", padx=22, pady=18)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        heading = tk.Label(
+            body,
+            text="Select signal",
+            bg="#dfe1e2",
+            fg="#1a1d20",
+            justify=tk.LEFT,
+            anchor="w",
+            font=(self.main_font, 28, "bold"),
+        )
+        heading.pack(anchor=tk.W, pady=(0, 4))
+
+        target = tk.Label(
+            body,
+            text=f"Kill PID {pid} ({name})",
+            bg="#dfe1e2",
+            fg="#1a1d20",
+            justify=tk.LEFT,
+            anchor="w",
+            font=(self.main_font, 22, "bold"),
+            wraplength=440,
+        )
+        target.pack(anchor=tk.W, pady=(0, 12))
+
+        choice_var = tk.StringVar(value="TERM")
+        option_frame = tk.LabelFrame(
+            body,
+            text="Signal to send",
+            bg="#dfe1e2",
+            fg="#1d2125",
+            font=(self.main_font, 13, "bold"),
+            padx=14,
+            pady=12,
+        )
+        option_frame.pack(fill=tk.BOTH, expand=True)
+
+        for label in ["TERM", "INT", "KILL", "QUIT", "HUP", "STOP", "CONT", "USR1", "USR2"]:
+            rb = tk.Radiobutton(
+                option_frame,
+                text=label,
+                variable=choice_var,
+                value=label,
+                bg="#dfe1e2",
+                fg="#1d2125",
+                activebackground="#dfe1e2",
+                activeforeground="#1d2125",
+                selectcolor="#dfe1e2",
+                font=(self.main_font, 18),
+                indicatoron=1,
+                highlightthickness=0,
+                padx=8,
+                pady=4,
+            )
+            rb.pack(anchor=tk.W)
+
+        result = {"signal": signal.SIGTERM}
+
+        def apply_action():
+            result["signal"] = choices.get(choice_var.get(), signal.SIGTERM)
+            dialog.destroy()
+
+        action_row = tk.Frame(body, bg="#dfe1e2")
+        action_row.pack(fill=tk.X, pady=(16, 0))
+
+        cancel_btn = tk.Button(
+            action_row,
+            text="Cancel",
+            bg="#dfe1e2",
+            fg="#1d2125",
+            activebackground="#dfe1e2",
+            activeforeground="#1d2125",
+            command=dialog.destroy,
+            font=(self.main_font, 14),
+            bd=1,
+            padx=16,
+            pady=8,
+        )
+        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        send_btn = tk.Button(
+            action_row,
+            text="Send signal",
+            bg="#2d3d4d",
+            fg="#f2f2f2",
+            activebackground="#3e536a",
+            activeforeground="#ffffff",
+            command=apply_action,
+            font=(self.main_font, 14, "bold"),
+            bd=1,
+            padx=18,
+            pady=8,
+        )
+        send_btn.pack(side=tk.RIGHT)
+        send_btn.focus_set()
+        dialog.bind("<Return>", lambda _e: apply_action())
+
+        dialog.deiconify()
+        dialog.wait_window(dialog)
+        return result["signal"]
+
+    def _kill_selected_process(self):
+        selection = self.processes_tree.selection()
+        if not selection:
+            messagebox.showinfo("Process Monitor", "Select a process to kill.")
+            return
+
+        item = self.processes_tree.item(selection[0])
+        values = item.get("values", "")
+        pid = int(values[0])
+        name = item.get("text", "")
+        signal_to_send = self._prompt_signal_selection(pid, name)
+        if signal_to_send is None:
+            return
+
+        try:
+            os.kill(pid, signal_to_send)
+            signal_name = next((name for name, sig in {
+                "TERM": signal.SIGTERM,
+                "INT": signal.SIGINT,
+                "KILL": signal.SIGKILL,
+                "QUIT": signal.SIGQUIT,
+                "HUP": signal.SIGHUP,
+                "STOP": signal.SIGSTOP,
+                "CONT": signal.SIGCONT,
+                "USR1": signal.SIGUSR1,
+                "USR2": signal.SIGUSR2,
+            }.items() if sig == signal_to_send), "SIGTERM")
+            messagebox.showinfo("Process Monitor", f"Signal {signal_name} sent to PID {pid} ({name}).")
+            self._refresh_processes()
+            return
+        except PermissionError:
+            messagebox.showerror(
+                "Permission denied",
+                f"You do not have permission to send signal to PID {pid} ({name}).\nTry running CatLogs with elevated privileges.")
+            return
+        except ProcessLookupError:
+            messagebox.showinfo("Process Monitor", f"PID {pid} is already gone.")
+            return
+        except Exception as exc:
+            messagebox.showerror("Kill failed", f"Could not signal PID {pid}: {exc}")
+
     def _build_keylogger_page(self, parent):
         from .keylogger import get_status
 
@@ -1325,6 +2287,8 @@ Keyboard Shortcuts:
                   style="Toolbar.TLabel",
                   font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
 
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_keylogger_csv).pack(side=tk.RIGHT, padx=(6, 0))
         ttk.Button(inner, text="Refresh",
                    command=self._refresh_keylogger_page).pack(side=tk.RIGHT, padx=(6, 0))
 
@@ -1348,15 +2312,13 @@ Keyboard Shortcuts:
         ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X)
 
         # Main content split: left = controls/status, right = log viewer
-        content_frame = ttk.Frame(parent)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        content_pane = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
+        content_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Left panel: Status & Controls
-        left_frame = ttk.LabelFrame(content_frame, text="  Daemon Status & Controls  ",
+        left_frame = ttk.LabelFrame(content_pane, text="  Daemon Status & Controls  ",
                                     style="Detail.TLabelframe", padding=12)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        left_frame.configure(width=360)
-        left_frame.pack_propagate(False)
+        content_pane.add(left_frame, weight=1)
 
         # Status info text widget
         self.kl_status_text = tk.Text(
@@ -1408,31 +2370,54 @@ Keyboard Shortcuts:
                    command=self._kl_recompile).pack(fill=tk.X, pady=(0, 4))
 
         # Right panel: Log viewer
-        right_frame = ttk.LabelFrame(content_frame, text="  Key Log Viewer  ",
+        right_frame = ttk.LabelFrame(content_pane, text="  Key Log Viewer  ",
                                      style="Detail.TLabelframe", padding=6)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        content_pane.add(right_frame, weight=3)
+
+        self.kl_notebook = ttk.Notebook(right_frame)
+        self.kl_notebook.pack(fill=tk.BOTH, expand=True)
+
+        # Tab 1: Readable Format
+        tab_readable = ttk.Frame(self.kl_notebook)
+        self.kl_notebook.add(tab_readable, text="Readable Format")
 
         self.kl_log_text = tk.Text(
-            right_frame, wrap=tk.WORD, state=tk.DISABLED,
+            tab_readable, wrap=tk.WORD, state=tk.DISABLED,
             font=(self.mono_font, 10),
             borderwidth=0, padx=10, pady=8,
             bg=self.colors["bg_table"], fg=self.colors["fg"],
         )
-        kl_scroll = ttk.Scrollbar(right_frame, orient=tk.VERTICAL,
+        kl_scroll = ttk.Scrollbar(tab_readable, orient=tk.VERTICAL,
                                   command=self.kl_log_text.yview)
         self.kl_log_text.configure(yscrollcommand=kl_scroll.set)
-
         self.kl_log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         kl_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.kl_log_text.tag_configure("timestamp", foreground=self.colors["accent"],
-                                       font=(self.mono_font, 10))
-        self.kl_log_text.tag_configure("key", foreground=self.colors["fg"],
-                                       font=(self.mono_font, 10))
-        self.kl_log_text.tag_configure("marker", foreground=self.colors.get("warning", "#d4a846"),
-                                       font=(self.mono_font, 10, "italic"))
-        self.kl_log_text.tag_configure("dim", foreground=self.colors.get("fg_dim", "#999999"),
-                                       font=(self.mono_font, 10, "italic"))
+        # Tab 2: Raw Format
+        tab_raw = ttk.Frame(self.kl_notebook)
+        self.kl_notebook.add(tab_raw, text="Raw Format (with Timestamps)")
+
+        self.kl_raw_text = tk.Text(
+            tab_raw, wrap=tk.WORD, state=tk.DISABLED,
+            font=(self.mono_font, 10),
+            borderwidth=0, padx=10, pady=8,
+            bg=self.colors["bg_table"], fg=self.colors["fg"],
+        )
+        raw_scroll = ttk.Scrollbar(tab_raw, orient=tk.VERTICAL,
+                                   command=self.kl_raw_text.yview)
+        self.kl_raw_text.configure(yscrollcommand=raw_scroll.set)
+        self.kl_raw_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        raw_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        for text_widget in (self.kl_log_text, self.kl_raw_text):
+            text_widget.tag_configure("timestamp", foreground=self.colors["accent"],
+                                           font=(self.mono_font, 10))
+            text_widget.tag_configure("key", foreground=self.colors["fg"],
+                                           font=(self.mono_font, 10))
+            text_widget.tag_configure("marker", foreground=self.colors.get("warning", "#d4a846"),
+                                           font=(self.mono_font, 10, "italic"))
+            text_widget.tag_configure("dim", foreground=self.colors.get("fg_dim", "#999999"),
+                                           font=(self.mono_font, 10, "italic"))
 
     def _refresh_keylogger_page(self):
         """Refresh the keylogger status panel and log viewer."""
@@ -1496,17 +2481,21 @@ Keyboard Shortcuts:
             self.kl_uninstall_btn.configure(state="disabled")
 
         # Update log viewer
-        self.kl_log_text.configure(state=tk.NORMAL)
-        self.kl_log_text.delete("1.0", tk.END)
+        for text_widget in (self.kl_log_text, getattr(self, 'kl_raw_text', None)):
+            if text_widget:
+                text_widget.configure(state=tk.NORMAL)
+                text_widget.delete("1.0", tk.END)
 
         lines = read_keylogs(max_lines=1500)
         if not lines:
-            self.kl_log_text.insert(tk.END,
-                                    "  No key logs recorded yet.\n\n"
-                                    "  Start the daemon to begin monitoring keyboard input.\n"
-                                    "  Key logs are stored locally at:\n"
-                                    f"  {status['log_file']}\n",
-                                    "dim")
+            for text_widget in (self.kl_log_text, getattr(self, 'kl_raw_text', None)):
+                if text_widget:
+                    text_widget.insert(tk.END,
+                                            "  No key logs recorded yet.\n\n"
+                                            "  Start the daemon to begin monitoring keyboard input.\n"
+                                            "  Key logs are stored locally at:\n"
+                                            f"  {status['log_file']}\n",
+                                            "dim")
         else:
             line_buf = []
 
@@ -1524,12 +2513,22 @@ Keyboard Shortcuts:
                     flush_line()
                     self.kl_log_text.insert(
                         tk.END, "\n" + line.strip() + "\n", "marker")
+                    if hasattr(self, 'kl_raw_text'):
+                        self.kl_raw_text.insert(
+                            tk.END, "\n" + line.strip() + "\n", "marker")
                     continue
 
                 if line.startswith("[") and "]" in line:
                     bracket_end = line.index("]") + 1
                     ts_part = line[:bracket_end]
                     key_part = line[bracket_end:].strip()
+                    
+                    if hasattr(self, 'kl_raw_text'):
+                        self.kl_raw_text.insert(tk.END, ts_part + " ", "timestamp")
+                        if "---" in key_part:
+                            self.kl_raw_text.insert(tk.END, key_part + "\n", "marker")
+                        else:
+                            self.kl_raw_text.insert(tk.END, key_part + "\n", "key")
 
                     if "---" in key_part:
                         flush_line()
@@ -1555,10 +2554,17 @@ Keyboard Shortcuts:
                 else:
                     flush_line()
                     self.kl_log_text.insert(tk.END, line + "\n", "key")
+                    if hasattr(self, 'kl_raw_text'):
+                        self.kl_raw_text.insert(tk.END, line + "\n", "key")
 
             flush_line()
-            self.kl_log_text.see(tk.END)
-        self.kl_log_text.configure(state=tk.DISABLED)
+            for text_widget in (self.kl_log_text, getattr(self, 'kl_raw_text', None)):
+                if text_widget:
+                    text_widget.see(tk.END)
+                    
+        for text_widget in (self.kl_log_text, getattr(self, 'kl_raw_text', None)):
+            if text_widget:
+                text_widget.configure(state=tk.DISABLED)
 
     def _kl_start_daemon(self):
         """Start the keylogger daemon with user confirmation."""
@@ -2621,6 +3627,23 @@ Keyboard Shortcuts:
                              variable=self.prot_mode_var, command=save_prot_mode)
         cb.pack(side=tk.LEFT)
 
+        ttk.Label(sec_card, text="Screen Lock History:", font=(self.main_font, 11, "bold"),
+                  background=self.colors["bg_secondary"]).pack(anchor=tk.W, pady=(12, 4))
+
+        lock_hist_frame = ttk.Frame(sec_card, style="Toolbar.TFrame")
+        lock_hist_frame.pack(fill=tk.X, anchor=tk.W)
+        self.screen_lock_history_var = tk.BooleanVar(
+            value=self.config.get("screen_lock_history", False))
+
+        def save_lock_history_mode():
+            self.config["screen_lock_history"] = self.screen_lock_history_var.get()
+            from .config import save_config
+            save_config(self.config)
+
+        lock_cb = ttk.Checkbutton(lock_hist_frame, text="Track screen lock/unlock, login and logout events in History",
+                                  variable=self.screen_lock_history_var, command=save_lock_history_mode)
+        lock_cb.pack(side=tk.LEFT)
+
         # # BOTTOM SAVE & CANCEL BAR
         # -------------------------------------------------------------------
         bottom_bar = ttk.Frame(main_frame, style="Toolbar.TFrame")
@@ -2677,31 +3700,21 @@ Keyboard Shortcuts:
         switch_tab("paths")
         refresh_paths_table()
 
-    def _open_new_window(self):
-        """Open a new CatLogs window in a separate process."""
-        import sys
+    def _toggle_fullscreen(self):
         try:
-            if getattr(sys, 'frozen', False):
-                # Running as PyInstaller bundle
-                subprocess.Popen(
-                    [sys.executable],
-                    start_new_session=True,
-                )
-            else:
-                subprocess.Popen(
-                    [sys.executable, '-m', 'catlogs'],
-                    start_new_session=True,
-                    cwd=os.path.dirname(os.path.dirname(
-                        os.path.abspath(__file__)))
-                )
-        except Exception as e:
-            messagebox.showerror("Error", f"Could not open new window:\n{e}")
+            current = self.root.attributes("-fullscreen")
+            self.root.attributes("-fullscreen", not current)
+        except tk.TclError:
+            try:
+                self.root.state("zoomed" if self.root.wm_state() != "zoomed" else "normal")
+            except Exception:
+                pass
 
     def _bind_shortcuts(self):
-        self.root.bind("<Control-n>", lambda _: self._open_new_window())
         self.root.bind("<Control-r>", lambda _: self._refresh_data())
         self.root.bind("<Control-e>", lambda _: self._export_csv())
         self.root.bind("<F5>", lambda _: self._refresh_data())
+        self.root.bind("<F11>", lambda _: self._toggle_fullscreen())
         self.root.bind("<Control-q>", lambda _: self.root.quit())
         self.root.bind("<Escape>", lambda _: self._clear_filters())
         self.root.bind("<Control-comma>", lambda _: self._show_settings())
@@ -2743,6 +3756,7 @@ Keyboard Shortcuts:
 
         def collect():
             entries = collect_all(
+                include_session_lifecycle=self.config.get("screen_lock_history", False),
                 progress_callback=self._on_progress,
             )
             self.root.after(0, lambda: self._on_collection_done(entries))
@@ -3048,6 +4062,41 @@ Keyboard Shortcuts:
         )
         self.details_text.configure(state=tk.DISABLED)
 
+    def _fetch_expected_output(self, command_str):
+        self.expected_output_text.configure(state=tk.NORMAL)
+        self.expected_output_text.delete("1.0", tk.END)
+        self.expected_output_text.insert(tk.END, "  Executing command to get real output...\n", "info")
+        self.expected_output_text.configure(state=tk.DISABLED)
+
+        def execute():
+            try:
+                args = build_command_preview_args(command_str)
+                if not args:
+                    output = "(No command provided)"
+                else:
+                    result = subprocess.run(args, capture_output=True, text=True, timeout=5)
+                    output = result.stdout
+                    if result.stderr:
+                        output += "\n--- STDERR ---\n" + result.stderr
+                    if not output.strip():
+                        output = "(No output)"
+            except subprocess.TimeoutExpired:
+                output = "(Command timed out after 5 seconds)"
+            except FileNotFoundError:
+                output = "(Command not found on this system)"
+            except Exception as e:
+                output = f"(Error executing command: {e})"
+
+            def update_ui():
+                self.expected_output_text.configure(state=tk.NORMAL)
+                self.expected_output_text.delete("1.0", tk.END)
+                self.expected_output_text.insert(tk.END, output + "\n", "output")
+                self.expected_output_text.configure(state=tk.DISABLED)
+
+            self.root.after(0, update_ui)
+
+        threading.Thread(target=execute, daemon=True).start()
+
     def _fetch_command_output(self, entry: CommandEntry):
         """Fetch and display contextual information about the selected command.
 
@@ -3058,6 +4107,7 @@ Keyboard Shortcuts:
         self.output_text.delete("1.0", tk.END)
 
         command = entry.command.strip()
+        self._fetch_expected_output(command)
 
         if entry.source == "process":
             self.output_text.insert(
@@ -3167,13 +4217,15 @@ Keyboard Shortcuts:
             self.output_text.configure(state=tk.DISABLED)
 
         elif entry.source in ("syslog", "kern.log", "daemon.log", "boot.log",
-                              "cron.log", "Xorg.log", "dmesg", "journal-errors"):
+                              "cron.log", "Xorg.log", "dmesg", "journal-errors", "power"):
+            label_name = "Power Event" if entry.source == "power" else "System Log Entry"
             self.output_text.insert(
-                tk.END, f"  System Log Entry ({entry.source})\n", "info")
+                tk.END, f"  {label_name} ({entry.source})\n", "info")
             self.output_text.insert(tk.END, "  " + "-" * 50 + "\n\n", "label")
             self.output_text.insert(tk.END, f"  {command}\n", "output")
+            detail_text = "This entry was read directly from system log files." if entry.source != "power" else "This entry records a power-cycle event such as reboot or shutdown."
             self.output_text.insert(
-                tk.END, "\n  This entry was read directly from system log files.\n", "placeholder")
+                tk.END, f"\n  {detail_text}\n", "placeholder")
             self.output_text.configure(state=tk.DISABLED)
 
         elif entry.source in ("dpkg.log", "apt.log"):
@@ -3311,6 +4363,16 @@ Keyboard Shortcuts:
             "placeholder",
         )
         self.output_text.configure(state=tk.DISABLED)
+        
+        if hasattr(self, 'expected_output_text'):
+            self.expected_output_text.configure(state=tk.NORMAL)
+            self.expected_output_text.delete("1.0", tk.END)
+            self.expected_output_text.insert(
+                tk.END,
+                "  Select a command to see its expected output here.",
+                "placeholder",
+            )
+            self.expected_output_text.configure(state=tk.DISABLED)
 
     def _export_csv(self):
         """Export the currently filtered table to a CSV file."""
@@ -3353,6 +4415,205 @@ Keyboard Shortcuts:
         except OSError as e:
             messagebox.showerror(
                 "Export Failed", f"Could not write file:\n{e}")
+
+
+    def _export_generic_csv(self, data_list, fieldnames, title, default_prefix):
+        if not data_list:
+            import tkinter.messagebox as messagebox
+            messagebox.showinfo("Export", "No data to export.")
+            return
+
+        from .exporter import generate_default_filename
+        from .export_log import log_export
+        from . import __version__
+        import csv
+        from datetime import datetime
+        import tkinter.filedialog as filedialog
+        import tkinter.messagebox as messagebox
+
+        default_name = generate_default_filename().replace("catlogs_export", default_prefix)
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=default_name,
+            title=title,
+        )
+
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+                writer.writeheader()
+                for row in data_list:
+                    writer.writerow(row)
+                
+                # Metadata
+                writer_list = csv.writer(f)
+                writer_list.writerow([])
+                writer_list.writerow(["---"])
+                writer_list.writerow(["Software", "CatLogs - System Logs"])
+                writer_list.writerow(["Release", __version__])
+                writer_list.writerow(["Export Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                writer_list.writerow(["Total Records", len(data_list)])
+                writer_list.writerow(["More Info", "https://catlogs.wassim.tech/"])
+                writer_list.writerow(["Note", "This data was fetched from CatLogs software"])
+                
+            log_export(filepath=filepath, record_count=len(data_list), filters={}, version=__version__)
+            messagebox.showinfo("Export Successful", f"Successfully exported {len(data_list)} records to:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export CSV:\n{e}")
+
+    def _export_treeview_csv(self, tree, title, default_prefix):
+        children = tree.get_children()
+        if not children:
+            import tkinter.messagebox as messagebox
+            messagebox.showinfo("Export", "No data to export.")
+            return
+
+        from .exporter import generate_default_filename
+        from .export_log import log_export
+        from . import __version__
+        import csv
+        from datetime import datetime
+        import tkinter.filedialog as filedialog
+        import tkinter.messagebox as messagebox
+
+        default_name = generate_default_filename().replace("catlogs_export", default_prefix)
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=default_name,
+            title=title,
+        )
+
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                headers = [tree.heading(c, "text") for c in tree["columns"]]
+                writer.writerow(headers)
+                
+                count = 0
+                for item in children:
+                    writer.writerow(tree.item(item, "values"))
+                    count += 1
+                
+                # Metadata
+                writer.writerow([])
+                writer.writerow(["---"])
+                writer.writerow(["Software", "CatLogs - System Logs"])
+                writer.writerow(["Release", __version__])
+                writer.writerow(["Export Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                writer.writerow(["Total Records", count])
+                writer.writerow(["More Info", "https://catlogs.wassim.tech/"])
+                writer.writerow(["Note", "This data was fetched from CatLogs software"])
+                
+            log_export(filepath=filepath, record_count=count, filters={}, version=__version__)
+            messagebox.showinfo("Export Successful", f"Successfully exported {count} records to:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export CSV:\n{e}")
+
+    def _export_read_errors_csv(self):
+        from .read_errors import load_read_errors
+        errors = load_read_errors()
+        self._export_generic_csv(errors, ["timestamp", "filepath", "error", "collector"], "Export Read Errors", "catlogs_read_errors")
+
+    def _export_deletion_history_csv(self):
+        from .deletion_history import load_deletion_history
+        history = load_deletion_history()
+        self._export_generic_csv(history, ["timestamp", "user", "item_type", "detail", "allowed"], "Export Deletion History", "catlogs_deletions")
+
+    def _export_export_history_csv(self):
+        from .export_log import load_export_history
+        history = load_export_history()
+        self._export_generic_csv(history, ["timestamp", "filepath", "record_count", "version"], "Export Export History", "catlogs_exports")
+
+    def _export_keylogger_csv(self):
+        from .keylogger import read_keylogs
+        lines = read_keylogs(max_lines=50000)
+        import tkinter.messagebox as messagebox
+        if not lines:
+            messagebox.showinfo("Export", "No data to export.")
+            return
+
+        from .exporter import generate_default_filename
+        from .export_log import log_export
+        from . import __version__
+        import csv
+        from datetime import datetime
+        import tkinter.filedialog as filedialog
+
+        default_name = generate_default_filename().replace("catlogs_export", "catlogs_keylogs")
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialfile=default_name,
+            title="Export Key Logs",
+        )
+
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Key Log"])
+                for line in lines:
+                    writer.writerow([line])
+                
+                # Metadata
+                writer.writerow([])
+                writer.writerow(["---"])
+                writer.writerow(["Software", "CatLogs - System Logs"])
+                writer.writerow(["Release", __version__])
+                writer.writerow(["Export Date", datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                writer.writerow(["Total Records", len(lines)])
+                writer.writerow(["More Info", "https://catlogs.wassim.tech/"])
+                writer.writerow(["Note", "This data was fetched from CatLogs software"])
+                
+            log_export(filepath=filepath, record_count=len(lines), filters={}, version=__version__)
+            messagebox.showinfo("Export Successful", f"Successfully exported {len(lines)} records to:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export CSV:\n{e}")
+
+    def _export_processes_csv(self):
+        children_ids = []
+        def _get_all(node=""):
+            for child in self.processes_tree.get_children(node):
+                children_ids.append(child)
+                _get_all(child)
+        _get_all()
+
+        if not children_ids:
+            import tkinter.messagebox as messagebox
+            messagebox.showinfo("Export", "No data to export.")
+            return
+
+        data_list = []
+        for child in children_ids:
+            item = self.processes_tree.item(child)
+            name = item.get("text", "")
+            values = item.get("values", [])
+            row_dict = {
+                "name": name,
+                "pid": values[0],
+                "user": values[1],
+                "cpu": values[2],
+                "mem": values[3],
+                "state": values[4],
+                "tty": values[5],
+                "ppid": values[6],
+                "elapsed": values[7],
+                "command": values[8]
+            }
+            data_list.append(row_dict)
+            
+        self._export_generic_csv(data_list, ["name", "pid", "user", "cpu", "mem", "state", "tty", "ppid", "elapsed", "command"], "Export Processes", "catlogs_processes")
+
 
 
 def _show_crash_dialog(title, error_details, exit_after=False, exit_code=1):
@@ -3481,3 +4742,4 @@ def run():
     root.deiconify()
 
     root.mainloop()
+

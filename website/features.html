@@ -11,14 +11,14 @@
 
 <div class="topbar">
     <div class="inner">
-        <span>CatLogs v1.1.0</span>
+        <span>CatLogs v1.2.0</span>
         <div class="nav-links">
             <a href="./index.html">About</a>
             <a href="./features.html" class="active">Docs</a>
             <a href="./privacy.html">Privacy</a>
             <a href="./download.html">Download</a>
-            <!--<a href="https://github.com/wmBolles">Source</a>-->
-                    </div>
+            <a href="https://github.com/wmBolles/Catlogs">Source</a>
+        </div>
         <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
     </div>
 </div>
@@ -46,15 +46,18 @@
         <li><a href="#read-errors">Read Errors &amp; Inaccessible Paths</a></li>
         <li><a href="#detail-panel">Detail Panel</a></li>
         <li><a href="#multi-window">Multi-Window</a></li>
+        <li><a href="#deletion-history">Deletion &amp; History</a></li>
         <li><a href="#key-logger">Key Logger (opt-in)</a></li>
         <li><a href="#settings-log-paths">Settings &mdash; Log File Paths</a></li>
         <li><a href="#settings-appearance">Settings &mdash; Appearance</a></li>
+        <li><a href="#settings-security">Settings &mdash; Security</a></li>
         <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
     </ol>
 
     <!-- Overview -->
     <h2 id="overview">Overview</h2>
-    <p>CatLogs is a local-only, privacy-first log viewer for Linux. It collects shell histories, authentication logs, journal entries, process information, and more into a single searchable interface. All data stays on your machine &mdash; no network connections, no telemetry, no data ever leaves your device.</p>
+    <p>CatLogs is a local-only, privacy-first Linux monitoring suite. It collects shell histories, authentication logs, journal entries, process information, daemon snapshots, boot and power activity, lock/session events, security scanner findings, and live system activity into a single searchable interface. All data stays on your machine &mdash; no network connections, no telemetry, no data ever leaves your device.</p>
+    <p>New in CatLogs v1.2.0: the <strong>Process Monitor</strong> tab offers a high-visibility live dashboard for running services and daemons, the <strong>History</strong> section includes lock/session tracking, and the <strong>Scanner</strong> can export professional PDF audit reports for local security reviews.</p>
 
     <div class="screenshot">
         <img src="./assets/screenshot.png" alt="CatLogs main interface showing the logs table with dark theme">
@@ -66,9 +69,13 @@
     <p>The CatLogs window is organized into tabs across the top of the application:</p>
     <ul>
         <li><strong>Logs:</strong> The primary view &mdash; a sortable, filterable table of all collected log entries.</li>
-        <li><strong>Export History:</strong> Review previously exported CSV files.</li>
+        <li><strong>Process Monitor:</strong> A live process dashboard with CPU, memory, state, parent/child details, daemon summary, and one-click kill controls.</li>
+        <li><strong>Scanner:</strong> Local security findings scanner with persistent history and PDF reporting.</li>
+        <li><strong>Lock Screen History:</strong> Review screen lock, unlock, login, and logout events from the system.</li>
+        <li><strong>Export History:</strong> Review previously exported CSV files and PDF audit reports.</li>
         <li><strong>Read Errors:</strong> View log paths that could not be read (permission denied, missing files, etc.).</li>
         <li><strong>Key Logger:</strong> Opt-in keyboard monitoring with daemon controls.</li>
+        <li><strong>Deletion History:</strong> Review a history of logs that have been deleted.</li>
         <li><strong>Help:</strong> Quick reference and application information.</li>
     </ul>
     <p>The filter bar sits directly below the tabs, providing instant access to search, user/shell/source filters, and date range controls.</p>
@@ -191,6 +198,14 @@
         <div class="caption">The <strong>+</strong> button opens a new independent CatLogs window.</div>
     </div>
 
+    <!-- Deletion & History -->
+    <h2 id="deletion-history">Deletion &amp; History</h2>
+    <p>Manage sensitive or unwanted log entries directly from the main view:</p>
+    <ul>
+        <li><strong>Delete Logs:</strong> Right-click on any log entry in the main table to delete it (disabled if Protection Mode is active).</li>
+        <li><strong>Deletion History:</strong> Review the complete list of deleted logs from the dedicated Deletion History tab to ensure accountability.</li>
+    </ul>
+
     <!-- Key Logger -->
     <h2 id="key-logger">Key Logger (opt-in)</h2>
     <p>Optional, privacy-preserving local keyboard monitoring:</p>
@@ -235,6 +250,13 @@
         <img src="./assets/settings_apearance.png" alt="Settings dialog showing the Appearance tab with Theme, Main UI Font, and Monospace / Log Font selectors">
         <div class="caption">The Appearance settings tab with theme and font configuration.</div>
     </div>
+
+    <!-- Settings — Security -->
+    <h2 id="settings-security">Settings &mdash; Security</h2>
+    <p>Open Settings with <code>Ctrl+,</code> and select the <strong>Security</strong> tab to manage application protection:</p>
+    <ul>
+        <li><strong>Protection Mode:</strong> Enable Protection Mode to prevent accidental or unauthorized log deletion. When active, the log deletion feature is disabled.</li>
+    </ul>
 
     <!-- Keyboard Shortcuts -->
     <h2 id="keyboard-shortcuts">Keyboard Shortcuts</h2>

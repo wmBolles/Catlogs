@@ -102,6 +102,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "window_feature_shown": False,
     "last_update_check": 0,
     "protection_mode": True,
+    "screen_lock_history": False,
     "log_paths": [dict(p) for p in DEFAULT_LOG_PATHS],
 }
 
