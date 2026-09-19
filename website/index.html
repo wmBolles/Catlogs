@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CatLogs</title>
+    <link rel="canonical" href="https://catlogs.wassim.tech/">
+    <link rel="icon" type="image/png" href="./icon/icon_256.png">
+    <link rel="stylesheet" href="./assets/style.css">
+    </head>
+<body>
+
+<div class="topbar">
+    <div class="inner">
+<span>CatLogs v1.1.0</span>
+        <div class="nav-links">
+            <a href="./index.html" class="active">About</a>
+            <a href="./features.html">Docs</a>
+            <a href="./privacy.html">Privacy</a>
+            <a href="./download.html">Download</a>
+            <!--<a href="https://github.com/wmBolles">Source</a>-->
+                    </div>
+        <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+</div>
+
+<div class="header">
+    <div class="inner">
+        <img class="hero-icon" src="./icon/icon-removebg.png" alt="CatLogs icon">
+        <div>
+            <h1>CatLogs</h1>
+            <p>A local-only, privacy-first log viewer for Linux. Collects shell histories, auth logs, journal entries, process info, and more into one interface.</p>
+            <a style="margin-top: 20px;" href="./catlogs_1.1.0_amd64.deb" class="download-btn">Download .deb Package</a>
+        </div>
+        
+    </div>
+    
+    
+</div>
+
+<div class="content">
+
+<h2>About CatLogs</h2>
+
+<p>CatLogs gathers historical commands and system events from various log sources across your Linux machine and displays them in a searchable, sortable table. It reads from shell history files (bash, zsh, fish), <code>/var/log/auth.log</code>, <code>systemd-journald</code>, process accounting, <code>last</code>/<code>lastb</code>, dpkg/apt logs, syslog, dmesg, and running processes.</p>
+
+<p>All data stays on your machine. CatLogs makes no network connections and sends nothing anywhere. You can export filtered views to CSV for auditing or record-keeping.</p>
+
+<div class="privacy-highlight">
+    <strong>Local-Only &amp; Privacy-First:</strong> CatLogs runs entirely offline on your local system. No network requests are made, no telemetry is gathered, and no data ever leaves your device.
+</div>
+
+<div class="screenshot">
+    <img src="./assets/screenshot.png" alt="CatLogs main interface showing the logs table, search filters, and detail panel">
+    <div class="caption">The main interface with dark theme, showing filtered command history.</div>
+</div>
+
+<div class="screenshot">
+    <img src="./assets/keylogs-example.png" alt="CatLogs Key Logger screen showing daemon controls and captured keystroke log viewer">
+    <div class="caption">The built-in Key Logger with daemon controls and real-time keystroke viewer.</div>
+</div>
+
+<h2>Explore CatLogs</h2>
+
+<p>Learn more about CatLogs features, privacy design, and installation options:</p>
+
+<div class="feature-grid">
+    <div class="feature-card">
+        <h3><a href="./features.html">Docs</a></h3>
+        <p>Explore supported log sources, real-time filtering, search capabilities, and keyboard shortcuts.</p>
+    </div>
+    <div class="feature-card">
+        <h3><a href="./privacy.html">Privacy</a></h3>
+        <p>Read about our local-only architecture with zero network access and complete data isolation.</p>
+    </div>
+    <div class="feature-card">
+        <h3><a href="./download.html">Download</a></h3>
+        <p>Install CatLogs on your Linux distribution using our quick script or standalone packages.</p>
+    </div>
+    <!--<div class="feature-card">
+        <h3><a href="https://github.com/wmBolles">GitHub</a></h3>
+        <p>Access the source code, track releases, and report issues on GitHub.</p>
+    </div>-->
+</div>
+
+<h2>Quick Install</h2>
+
+<p>Install CatLogs directly on your Linux machine with a single command:</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'curl -sSL https://catlogs.wassim.tech/install.sh | sudo bash')">copy</span>$ curl -sSL https://catlogs.wassim.tech/install.sh | sudo bash</pre>
+
+<p style="margin-top: 20px;">Or download the Debian package directly:</p>
+<p><a href="./catlogs_1.1.0_amd64.deb" class="download-btn">Download .deb Package</a></p>
+
+<p>For standalone binary downloads and other options, see the <a href="./download.html">Download page</a>.</p>
+
+<h2>About the Developer</h2>
+<div class="developer-profile">
+    <img src="https://avatars.githubusercontent.com/u/106280014?v=4" alt="Wassim Bolles">
+    <div class="developer-info">
+        <h3>Wassim Bolles</h3>
+        <p>Software developer and creator of CatLogs.</p>
+        <div class="developer-links">
+            <a href="https://github.com/wmBolles" target="_blank">GitHub</a>
+            <a href="https://wassim.tech/" target="_blank">Website</a>
+                    </div>
+        <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+</div>
+
+</div>
+
+<div class="footer">
+    <div class="inner">
+        <p>Copyright &copy; 2026 CatLogs Project. Developed by <a href="https://wassim.tech/">Wassim Bolles</a>.</p>
+    </div>
+</div>
+
+<script>
+function copyCode(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'copied';
+        btn.classList.add('copied');
+        setTimeout(function() {
+            btn.textContent = 'copy';
+            btn.classList.remove('copied');
+        }, 2000);
+    }).catch(function() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            btn.textContent = 'copied';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        } catch(e) {}
+        document.body.removeChild(ta);
+    });
+}
+</script>
+
+
+</body>
+</html>
