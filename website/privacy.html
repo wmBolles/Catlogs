@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CatLogs/Privacy</title>
+    <link rel="icon" type="image/png" href="./icon/icon_256.png">
+    <link rel="stylesheet" href="./assets/style.css">
+    </head>
+<body>
+
+<div class="topbar">
+    <div class="inner">
+        <span>CatLogs v1.2.0</span>
+        <div class="nav-links">
+            <a href="./index.html">About</a>
+            <a href="./features.html">Docs</a>
+            <a href="./privacy.html" class="active">Privacy</a>
+            <a href="./download.html">Download</a>
+            <a href="./releases.html">Releases</a>
+            <a href="https://github.com/wmBolles/Catlogs">Source</a>
+        </div>
+        <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+</div>
+
+<div class="header">
+    <div class="inner">
+        <a href="./index.html"><img src="./icon/icon-removebg.png" alt="CatLogs icon" width="72" height="72"></a>
+        <div>
+            <h1><a href="./index.html">CatLogs</a></h1>
+            <p>A local log viewer for Linux.</p>
+        </div>
+    </div>
+</div>
+
+<div class="content">
+
+<h2>Your Data Stays Local</h2>
+
+<div class="privacy-highlight">
+    CatLogs is 100% offline. No servers, no accounts, no tracking, no analytics. Your logs never leave your computer.
+</div>
+
+<p>CatLogs makes zero network connections. It does not phone home, send telemetry, check for updates, or transmit any data whatsoever.</p>
+
+<p>All log data is read from your local filesystem and displayed locally. Nothing leaves your machine.</p>
+
+<h2>What CatLogs Reads</h2>
+
+<p>CatLogs accesses only the local files and system facilities required to display your system history:</p>
+
+<ul>
+    <li>Shell history files (bash, zsh, fish) from user home directories</li>
+    <li>System logs: <code>/var/log/auth.log</code>, <code>syslog</code>, <code>kern.log</code>, <code>dpkg.log</code>, apt logs, <code>boot.log</code>, <code>daemon.log</code>, Xorg logs</li>
+    <li>Systemd journal entries</li>
+    <li>Process information (running processes, accounting)</li>
+    <li>Login records (last/lastb, failed logins)</li>
+    <li>dmesg kernel ring buffer</li>
+    <li>Custom log paths you explicitly add</li>
+</ul>
+
+<p>CatLogs only reads these files. It never modifies, deletes, or writes to system logs.</p>
+
+<h2>What CatLogs Does NOT Do</h2>
+
+<ul>
+    <li>Does not connect to the internet</li>
+    <li>Does not send data to any server</li>
+    <li>Does not collect telemetry or analytics</li>
+    <li>Does not require an account or registration</li>
+    <li>Does not track usage patterns</li>
+    <li>Does not modify or delete any system log files</li>
+    <li>Does not store passwords or credentials</li>
+    <li>Does not run background services (except the opt-in keylogger daemon if explicitly enabled by the user)</li>
+</ul>
+
+<h2>Export Privacy</h2>
+
+<p>When you export to CSV, the file is saved locally to a location you choose. No data is uploaded or shared during export.</p>
+
+<p>Export metadata includes: software name and version, export date and time, your local username, total record count, and which filters were active (included users, included shells, included sources, date range, search query).</p>
+
+<p>You control who sees the exported file.</p>
+
+<h2>Key Logger Transparency</h2>
+
+<p>CatLogs provides full transparency for its keystroke logging feature:</p>
+
+<ul>
+    <li>The keylogger feature is completely opt-in</li>
+    <li>It is disabled by default and requires explicit user action to start</li>
+    <li>Key logs are stored locally only</li>
+    <li>You can start and stop the daemon at any time</li>
+    <li>The auto-start service is optional and requires explicit installation</li>
+</ul>
+
+<h2>Open Source</h2>
+
+<p>CatLogs is open source &mdash; you can inspect every line of code.</p>
+
+<p>Source available at <a href="https://github.com/wmBolles/Catlogs">https://github.com/wmBolles/Catlogs</a>.</p>
+
+<p>You are welcome to audit, fork, and contribute.</p>
+
+</div>
+
+<div class="footer">
+    <div class="inner">
+        <p>Copyright &copy; 2026 CatLogs Project. Developed by <a href="https://wassim.tech/">Wassim Bolles</a>.</p>
+    </div>
+</div>
+
+
+</body>
+</html>

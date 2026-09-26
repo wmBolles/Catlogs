@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CatLogs/Docs</title>
+    <link rel="icon" type="image/png" href="./icon/icon_256.png">
+    <link rel="stylesheet" href="./assets/style.css">
+    </head>
+<body>
+
+<div class="topbar">
+    <div class="inner">
+        <span>CatLogs v1.2.0</span>
+        <div class="nav-links">
+            <a href="./index.html">About</a>
+            <a href="./features.html" class="active">Docs</a>
+            <a href="./privacy.html">Privacy</a>
+            <a href="./download.html">Download</a>
+            <a href="./releases.html">Releases</a>
+            <a href="https://github.com/wmBolles/Catlogs">Source</a>
+        </div>
+        <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+</div>
+
+<div class="header">
+    <div class="inner">
+        <img src="./icon/icon-removebg.png" alt="CatLogs icon">
+        <div>
+            <h1>CatLogs</h1>
+            <p>Documentation &amp; User Guide</p>
+        </div>
+    </div>
+</div>
+
+<div class="content">
+
+    <!-- Table of Contents -->
+    <h2>Contents</h2>
+    <ol class="toc">
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#main-interface">Main Interface</a></li>
+        <li><a href="#log-sources">Log Sources</a></li>
+        <li><a href="#filtering-search">Filtering &amp; Search</a></li>
+        <li><a href="#csv-export">CSV Export</a></li>
+        <li><a href="#read-errors">Read Errors &amp; Inaccessible Paths</a></li>
+        <li><a href="#detail-panel">Detail Panel</a></li>
+        <li><a href="#multi-window">Multi-Window</a></li>
+        <li><a href="#deletion-history">Deletion &amp; History</a></li>
+        <li><a href="#key-logger">Key Logger (opt-in)</a></li>
+        <li><a href="#settings-log-paths">Settings &mdash; Log File Paths</a></li>
+        <li><a href="#settings-appearance">Settings &mdash; Appearance</a></li>
+        <li><a href="#settings-security">Settings &mdash; Security</a></li>
+        <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
+    </ol>
+
+    <!-- Overview -->
+    <h2 id="overview">Overview</h2>
+    <p>CatLogs is a local-only, privacy-first Linux monitoring suite. It collects shell histories, authentication logs, journal entries, process information, daemon snapshots, boot and power activity, lock/session events, security scanner findings, and live system activity into a single searchable interface. All data stays on your machine &mdash; no network connections, no telemetry, no data ever leaves your device.</p>
+    <p>New in CatLogs v1.2.0: the <strong>Process Monitor</strong> tab offers a high-visibility live dashboard for running services and daemons, the <strong>History</strong> section includes lock/session tracking, and the <strong>Scanner</strong> can export professional PDF audit reports for local security reviews.</p>
+
+    <div class="screenshot">
+        <img src="./assets/screenshot.png" alt="CatLogs main interface showing the logs table with dark theme">
+        <div class="caption">The main interface with dark theme, showing filtered command history.</div>
+    </div>
+
+    <!-- Main Interface -->
+    <h2 id="main-interface">Main Interface</h2>
+    <p>The CatLogs window is organized into tabs across the top of the application:</p>
+    <ul>
+        <li><strong>Logs:</strong> The primary view &mdash; a sortable, filterable table of all collected log entries.</li>
+        <li><strong>Process Monitor:</strong> A live process dashboard with CPU, memory, state, parent/child details, daemon summary, and one-click kill controls.</li>
+        <li><strong>Scanner:</strong> Local security findings scanner with persistent history and PDF reporting.</li>
+        <li><strong>Lock Screen History:</strong> Review screen lock, unlock, login, and logout events from the system.</li>
+        <li><strong>Export History:</strong> Review previously exported CSV files and PDF audit reports.</li>
+        <li><strong>Read Errors:</strong> View log paths that could not be read (permission denied, missing files, etc.).</li>
+        <li><strong>Key Logger:</strong> Opt-in keyboard monitoring with daemon controls.</li>
+        <li><strong>Deletion History:</strong> Review a history of logs that have been deleted.</li>
+        <li><strong>Help:</strong> Quick reference and application information.</li>
+    </ul>
+    <p>The filter bar sits directly below the tabs, providing instant access to search, user/shell/source filters, and date range controls.</p>
+
+    <div class="screenshot">
+        <img src="./assets/filter_search.png" alt="CatLogs filter and search toolbar showing Search, User, Shell, Source, From/To fields, Refresh and Export CSV buttons">
+        <div class="caption">The filter toolbar with search, multi-select filters, date range, and action buttons.</div>
+    </div>
+
+    <!-- Log Sources -->
+    <h2 id="log-sources">Log Sources</h2>
+    <p>CatLogs collects from 15+ sources across your Linux system, consolidating disparate logs into a unified, queryable view:</p>
+    <ul>
+        <li><strong>Shell History:</strong> Bash, Zsh, and Fish command histories across user accounts.</li>
+        <li><strong>Auth / Sudo logs:</strong> Authentication events, privilege escalation, and sudo commands from <code>/var/log/auth.log</code> or secure logs.</li>
+        <li><strong>Systemd Journal:</strong> Centralized system and service journal entries collected via <code>systemd-journald</code>.</li>
+        <li><strong>Running Processes:</strong> Live process table snapshots including PIDs, user ownership, and command arguments.</li>
+        <li><strong>Process Accounting (lastcomm):</strong> Records of previously terminated processes and commands.</li>
+        <li><strong>Login/Logout records (last/lastb):</strong> Successful and historical session logs via utmp/wtmp.</li>
+        <li><strong>Failed login attempts:</strong> Failed authentication attempts recorded via btmp logs.</li>
+        <li><strong>Syslog:</strong> General system activity and daemon logs from standard syslog facilities.</li>
+        <li><strong>Kernel log (dmesg):</strong> Low-level Linux kernel ring buffer messages and hardware diagnostic events.</li>
+        <li><strong>DPKG package logs:</strong> Package installation, upgrade, unpack, and removal events.</li>
+        <li><strong>APT package logs:</strong> High-level package manager transactions and command-line actions.</li>
+        <li><strong>Cron job logs:</strong> Scheduled job runs, execution records, and cron daemon events.</li>
+        <li><strong>Boot logs:</strong> System startup sequences and boot records.</li>
+        <li><strong>Daemon logs:</strong> Background service and daemon operational logs.</li>
+        <li><strong>Xorg display server logs:</strong> Display manager, graphics driver, and X11 session logs.</li>
+        <li><strong>Systemd services status:</strong> Operational status and state transitions of registered systemd units.</li>
+        <li><strong>Custom log file paths:</strong> Support for monitoring user-specified log paths with intelligent format auto-detection for:
+            <ul>
+                <li>Syslog</li>
+                <li>Auth / Sudo</li>
+                <li>Web Servers (Nginx / Apache)</li>
+                <li>JSON Lines</li>
+                <li>Application logs</li>
+                <li>DPKG</li>
+                <li>Auditd</li>
+                <li>Database logs</li>
+            </ul>
+        </li>
+    </ul>
+
+    <p>Use the <strong>Source</strong> multi-select filter to target specific log sources or combine multiple collectors into a focused view:</p>
+
+    <div class="screenshot">
+        <img src="./assets/source_logs_files.png" alt="Source filter dropdown showing available log sources like Alternatives Log, Xorg, dpkg, journal, last, process, and more">
+        <div class="caption">The Source multi-select dropdown listing all available log collectors.</div>
+    </div>
+
+    <!-- Filtering & Search -->
+    <h2 id="filtering-search">Filtering &amp; Search</h2>
+    <p>Isolate critical events quickly with comprehensive search and filtering capabilities:</p>
+    <ul>
+        <li><strong>Full-text search:</strong> Search across all log fields simultaneously for keywords, command arguments, or error strings.</li>
+        <li><strong>Multi-select user filter:</strong> Filter entries by specific user accounts, with options to include or exclude selected users.</li>
+        <li><strong>Multi-select shell filter:</strong> Filter shell history by shell type (Bash, Zsh, Fish).</li>
+        <li><strong>Multi-select source filter:</strong> Target specific log sources or combine multiple collectors into a focused view.</li>
+        <li><strong>Date range filtering:</strong> Restrict log entries by time interval using flexible From and To filters (supporting <code>YYYY-MM-DD</code> or <code>YYYY-MM-DD HH:MM:SS</code>).</li>
+        <li><strong>Quick reset:</strong> Clear all active filters and search terms instantly with the <kbd>Esc</kbd> key.</li>
+    </ul>
+
+    <!-- CSV Export -->
+    <h2 id="csv-export">CSV Export</h2>
+    <p>Export your log analysis for reporting, auditing, or sharing:</p>
+    <ul>
+        <li><strong>Filtered view export:</strong> Export exactly what you see, maintaining active search criteria, user filters, source filters, and date ranges.</li>
+        <li><strong>Audit metadata header:</strong> Exported CSV files include structured metadata:
+            <ul>
+                <li>Software version</li>
+                <li>Export timestamp</li>
+                <li>Exporter username</li>
+                <li>Total records count</li>
+                <li>Active filter details (included users, included shells, included sources, date range, search query)</li>
+            </ul>
+        </li>
+    </ul>
+    <p>Press <code>Ctrl+E</code> or click the <strong>Export CSV</strong> button to open the export dialog:</p>
+
+    <div class="screenshot">
+        <img src="./assets/export.png" alt="Export Commands to CSV dialog with directory browser, file name field, and Save/Cancel buttons">
+        <div class="caption">The CSV export dialog with auto-generated timestamped filename.</div>
+    </div>
+
+    <!-- Read Errors -->
+    <h2 id="read-errors">Read Errors &amp; Inaccessible Paths</h2>
+    <p>The <strong>Read Errors</strong> tab lists all log file paths that CatLogs attempted to read but could not access. Each entry shows:</p>
+    <ul>
+        <li>The file path that failed</li>
+        <li>The error message (e.g. <code>Permission denied</code>)</li>
+        <li>Which collector attempted the read</li>
+        <li>The timestamp of the last attempt</li>
+    </ul>
+    <p>This helps you diagnose permission issues. Running CatLogs with elevated privileges (e.g. via <code>sudo</code>) will unlock access to protected system logs like <code>/var/log/auth.log</code> and <code>/var/log/syslog</code>.</p>
+
+    <div class="screenshot">
+        <img src="./assets/access_denied_paths.png" alt="Read Errors tab showing inaccessible paths with Permission Denied errors for syslog, kern.log, auth.log and other system log files">
+        <div class="caption">The Read Errors tab listing inaccessible log paths with detailed error information.</div>
+    </div>
+
+    <!-- Detail Panel -->
+    <h2 id="detail-panel">Detail Panel</h2>
+    <p>Inspect log entries in granular detail:</p>
+    <ul>
+        <li><strong>Deep inspection:</strong> Click any log row to open the detail panel displaying full, untruncated message contents.</li>
+        <li><strong>System context:</strong> View contextual system state, timestamps, user identities, process IDs, and related metadata corresponding to the event.</li>
+    </ul>
+
+    <!-- Multi-Window -->
+    <h2 id="multi-window">Multi-Window</h2>
+    <p>Work across multiple workspaces and log streams simultaneously:</p>
+    <ul>
+        <li><strong>Simultaneous windows:</strong> Open multiple independent CatLogs windows at the same time.</li>
+        <li><strong>Parallel inspection:</strong> Compare logs side-by-side across different filters, sources, or time periods without clearing your current workspace.</li>
+    </ul>
+    <p>Click the <strong>+</strong> button in the top-left corner or press <code>Ctrl+N</code> to open a new window:</p>
+
+    <div class="screenshot">
+        <img src="./assets/new_window.png" alt="CatLogs top-left corner showing the paw icon and the + button to open a new window">
+        <div class="caption">The <strong>+</strong> button opens a new independent CatLogs window.</div>
+    </div>
+
+    <!-- Deletion & History -->
+    <h2 id="deletion-history">Deletion &amp; History</h2>
+    <p>Manage sensitive or unwanted log entries directly from the main view:</p>
+    <ul>
+        <li><strong>Delete Logs:</strong> Right-click on any log entry in the main table to delete it (disabled if Protection Mode is active).</li>
+        <li><strong>Deletion History:</strong> Review the complete list of deleted logs from the dedicated Deletion History tab to ensure accountability.</li>
+    </ul>
+
+    <!-- Key Logger -->
+    <h2 id="key-logger">Key Logger (opt-in)</h2>
+    <p>Optional, privacy-preserving local keyboard monitoring:</p>
+    <ul>
+        <li><strong>Opt-in daemon:</strong> Monitor keyboard input exclusively via an explicitly enabled daemon.</li>
+        <li><strong>Direct daemon control:</strong> Start and stop daemon monitoring directly from within CatLogs.</li>
+        <li><strong>View key logs:</strong> Review captured keystrokes in a dedicated log view.</li>
+        <li><strong>Reboot persistence:</strong> Optionally install an auto-start service to preserve logging across system reboots.</li>
+    </ul>
+
+    <div class="screenshot">
+        <img src="./assets/keylogs-example.png" alt="CatLogs Key Logger screen showing daemon status, controls, and captured keystroke log viewer">
+        <div class="caption">The Key Logger tab with daemon controls and real-time keystroke log viewer.</div>
+    </div>
+
+    <!-- Settings — Log File Paths -->
+    <h2 id="settings-log-paths">Settings &mdash; Log File Paths</h2>
+    <p>Open Settings with <code>Ctrl+,</code> and select the <strong>Log File Paths</strong> tab to configure collectors and monitor non-standard log destinations:</p>
+    <ul>
+        <li><strong>Monitored paths overview:</strong> View all currently active and configured log file paths in one management table.</li>
+        <li><strong>Add custom log file paths:</strong> Ingest custom log files with automatic format detection.</li>
+        <li><strong>Format preview and testing:</strong> Test and preview log parsing rules before adding a path to ensure accurate column extraction.</li>
+        <li><strong>Lifecycle management:</strong> Toggle the active state of individual paths or remove paths when no longer needed.</li>
+    </ul>
+
+    <div class="screenshot">
+        <img src="./assets/settings_edit_logfile.png" alt="Settings dialog showing the Log File Paths tab with a table of all monitored paths, their formats, and file statuses">
+        <div class="caption">The Log File Paths settings tab with all monitored paths, statuses, and management controls.</div>
+    </div>
+
+    <!-- Settings — Appearance -->
+    <h2 id="settings-appearance">Settings &mdash; Appearance</h2>
+    <p>Open Settings with <code>Ctrl+,</code> and select the <strong>Appearance</strong> tab to customize the visual presentation:</p>
+    <ul>
+        <li><strong>6 built-in themes:</strong> Dark, Light, Dracula, Monokai, Nord, and Cappuccino.</li>
+        <li><strong>Customizable main UI font:</strong> Configure the interface font family and size.</li>
+        <li><strong>Customizable monospace/log font:</strong> Choose the fixed-width font for log rows and terminal output.</li>
+        <li><strong>Zoom in/out support:</strong> Scale the entire user interface up or down for high-resolution displays.</li>
+    </ul>
+
+    <div class="screenshot">
+        <img src="./assets/settings_apearance.png" alt="Settings dialog showing the Appearance tab with Theme, Main UI Font, and Monospace / Log Font selectors">
+        <div class="caption">The Appearance settings tab with theme and font configuration.</div>
+    </div>
+
+    <!-- Settings — Security -->
+    <h2 id="settings-security">Settings &mdash; Security</h2>
+    <p>Open Settings with <code>Ctrl+,</code> and select the <strong>Security</strong> tab to manage application protection:</p>
+    <ul>
+        <li><strong>Protection Mode:</strong> Enable Protection Mode to prevent accidental or unauthorized log deletion. When active, the log deletion feature is disabled.</li>
+    </ul>
+
+    <!-- Keyboard Shortcuts -->
+    <h2 id="keyboard-shortcuts">Keyboard Shortcuts</h2>
+    <p>Navigate and control CatLogs efficiently without leaving the keyboard. Press <code>Ctrl+?</code> to open the shortcuts reference dialog:</p>
+
+    <div class="screenshot">
+        <img src="./assets/keyboard_shortcuts.png" alt="Keyboard Shortcuts dialog showing General shortcuts (F5, Esc, Ctrl+?, Ctrl++, Ctrl+-) and Application shortcuts (Ctrl+E, Ctrl+R, Ctrl+comma, Ctrl+Q)">
+        <div class="caption">The Keyboard Shortcuts reference dialog.</div>
+    </div>
+
+    <table class="methods">
+        <thead>
+            <tr>
+                <th>Shortcut</th>
+                <th>Description</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>F5</code> / <code>Ctrl+R</code></td>
+                <td>Refresh log sources and reload entries</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+E</code></td>
+                <td>Export currently filtered logs to CSV</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+N</code></td>
+                <td>Open a new CatLogs window</td>
+            </tr>
+            <tr>
+                <td><code>Esc</code></td>
+                <td>Clear all active filters and search query</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl++</code> / <code>Ctrl+-</code></td>
+                <td>Zoom in / Zoom out user interface</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+0</code></td>
+                <td>Reset zoom level to default</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+,</code></td>
+                <td>Open Settings and Custom Log Paths dialog</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+?</code></td>
+                <td>Open Keyboard Shortcuts reference dialog</td>
+            </tr>
+            <tr>
+                <td><code>Ctrl+Q</code></td>
+                <td>Quit application</td>
+            </tr>
+        </tbody>
+    </table>
+
+</div>
+
+<div class="footer">
+    <div class="inner">
+        <p>Copyright &copy; 2026 CatLogs Project. Developed by <a href="https://wassim.tech/">Wassim Bolles</a>.</p>
+    </div>
+</div>
+
+
+</body>
+</html>

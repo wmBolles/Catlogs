@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CatLogs/Download</title>
+    <link rel="icon" type="image/png" href="./icon/icon_256.png">
+    <link rel="stylesheet" href="./assets/style.css">
+    </head>
+<body>
+
+<div class="topbar">
+    <div class="inner">
+        <span>CatLogs v1.2.0</span>
+        <div class="nav-links">
+            <a href="./index.html">About</a>
+            <a href="./features.html">Docs</a>
+            <a href="./privacy.html">Privacy</a>
+            <a href="./download.html" class="active">Download</a>
+            <a href="./releases.html">Releases</a>
+            <a href="https://github.com/wmBolles/Catlogs">Source</a>
+        </div>
+        <button class="nav-toggle" onclick="document.querySelector('.nav-links').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+</div>
+
+<div class="header">
+    <div class="inner">
+        <img src="./icon/icon-removebg.png" alt="CatLogs icon" width="72" height="72">
+        <div>
+            <h1><a href="./index.html">CatLogs</a></h1>
+            <p>A local log viewer for Linux.</p>
+        </div>
+    </div>
+</div>
+
+<div class="content">
+
+<h2>Installation</h2>
+
+<p>Choose one of the methods below. The quick install and binary download require no dependencies.</p>
+
+<div class="table-wrapper">
+<table class="methods">
+    <thead>
+        <tr>
+            <th>Method</th>
+            <th>What it does</th>
+            <th>Requires</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>Quick install</td>
+            <td>Downloads binary + icon, creates desktop entry</td>
+            <td>curl, root</td>
+        </tr>
+        <tr>
+            <td>Binary download</td>
+            <td>Single standalone file, run from anywhere</td>
+            <td>curl</td>
+        </tr>
+        <tr>
+            <td>.deb package</td>
+            <td>Installs via dpkg with full desktop integration</td>
+            <td>Debian/Ubuntu, root</td>
+        </tr>
+    </tbody>
+</table>
+</div>
+
+<h3>Quick install (one command)</h3>
+
+<p>Downloads the installer script, which fetches the binary and icon, installs them to <code>/usr/local/bin</code>, and creates a <code>.desktop</code> entry.</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'curl -sSL https://catlogs.wassim.tech/install.sh | sudo bash')">copy</span>$ curl -sSL https://catlogs.wassim.tech/install.sh | sudo bash</pre>
+
+<h3>Binary download</h3>
+
+<p>Download standalone binary directly, no dependencies, everything bundled.</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'curl -sSL https://catlogs.wassim.tech/catlogs -o catlogs\nchmod +x catlogs\n./catlogs')">copy</span>$ curl -sSL https://catlogs.wassim.tech/catlogs -o catlogs
+$ chmod +x catlogs
+$ ./catlogs</pre>
+
+<p>To install system-wide:</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'sudo mv catlogs /usr/local/bin/')">copy</span>$ sudo mv catlogs /usr/local/bin/</pre>
+
+<h3>Debian / Ubuntu package (.deb)</h3>
+
+<p>For Debian-based systems. Installs binary to <code>/usr/bin</code>, icon, and desktop entry. Uninstall with <code>dpkg -r catlogs</code>.</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'curl -sSL https://catlogs.wassim.tech/catlogs_1.2.0_amd64.deb -o catlogs.deb\nsudo dpkg -i catlogs.deb')">copy</span>$ curl -sSL https://catlogs.wassim.tech/catlogs_1.2.0_amd64.deb -o catlogs.deb
+$ sudo dpkg -i catlogs.deb</pre>
+
+<p style="margin-top: 20px;"><a href="./catlogs_1.2.0_amd64.deb" class="download-btn">Download .deb Package</a></p>
+
+<h2>System Requirements</h2>
+
+<dl>
+    <dt>Operating system</dt>
+    <dd>Linux (any distribution - Debian, Ubuntu, Fedora, Arch, etc.)</dd>
+
+    <dt>For binary download</dt>
+    <dd>No dependencies. The standalone binary includes everything it needs.</dd>
+
+    <dt>Display</dt>
+    <dd>X11 or Wayland with XWayland. Minimum window size: 900x520 pixels.</dd>
+</dl>
+
+<h2>Uninstalling</h2>
+
+<p>If installed via quick installer or binary download:</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'sudo rm /usr/local/bin/catlogs\nsudo rm /usr/share/applications/catlogs.desktop\nsudo rm /usr/share/icons/hicolor/256x256/apps/catlogs.png')">copy</span>$ sudo rm /usr/local/bin/catlogs
+$ sudo rm /usr/share/applications/catlogs.desktop
+$ sudo rm /usr/share/icons/hicolor/256x256/apps/catlogs.png</pre>
+
+<p>If installed via .deb:</p>
+
+<pre><span class="copy-btn" onclick="copyCode(this, 'sudo dpkg -r catlogs')">copy</span>$ sudo dpkg -r catlogs</pre>
+
+</div>
+
+<div class="footer">
+    <div class="inner">
+       <p>Copyright &copy; 2026 CatLogs Project. Developed by <a href="https://wassim.tech/">Wassim Bolles</a>.</p>
+    </div>
+</div>
+
+<script>
+function copyCode(btn, text) {
+    navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'copied';
+        btn.classList.add('copied');
+        setTimeout(function() {
+            btn.textContent = 'copy';
+            btn.classList.remove('copied');
+        }, 2000);
+    }).catch(function() {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            btn.textContent = 'copied';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        } catch(e) {}
+        document.body.removeChild(ta);
+    });
+}
+</script>
+
+
+</body>
+
+</html>
