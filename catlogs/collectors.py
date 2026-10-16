@@ -437,9 +437,10 @@ def collect_auth_log(paths: Optional[List[str]] = None) -> List[CommandEntry]:
             "/var/log/secure.1",
         ]
 
-    # Example: Sep  6 09:40:00 hostname sudo: username : TTY=pts/0 ; PWD=/home/user ; USER=root ; COMMAND=/usr/bin/apt update
+    # Example BSD: Sep  6 09:40:00 hostname sudo: username : TTY=pts/0 ; PWD=/home/user ; USER=root ; COMMAND=/usr/bin/apt update
+    # Example ISO: 2026-09-06T09:40:00.123456+00:00 hostname sudo[pid]: username : TTY=pts/0 ; PWD=/home/user ; USER=root ; COMMAND=/usr/bin/apt update
     sudo_pattern = re.compile(
-        r"^(\w{3}\s+\d+\s+[\d:]+)\s+"  # timestamp
+        r"^([A-Z][a-z]{2}\s+\d+\s+[\d:]+|\d{4}-\d{2}-\d{2}T[\d:.]+[\w+-:]*)\s+"  # timestamp
         r"(\S+)\s+"                       # hostname
         r"sudo(?:\[\d+\])?:\s+"          # sudo[pid]:
         r"(\S+)\s+:\s+"                  # username :
@@ -451,6 +452,7 @@ def collect_auth_log(paths: Optional[List[str]] = None) -> List[CommandEntry]:
     pwd_pattern = re.compile(r"PWD=(\S+)")
     runas_pattern = re.compile(r"USER=(\S+)")
 
+    from .log_parsers import parse_any_timestamp
     current_year = datetime.now().year
 
     for raw_path in auth_paths:
@@ -474,23 +476,7 @@ def collect_auth_log(paths: Optional[List[str]] = None) -> List[CommandEntry]:
                 continue
             command = cmd_match.group(1).strip()
 
-            # Parse timestamp (syslog format doesn't include year)
-            timestamp = None
-            try:
-                timestamp = datetime.strptime(
-                    f"{current_year} {ts_str}", "%Y %b %d %H:%M:%S"
-                )
-                # Handle year rollover
-                if timestamp > datetime.now():
-                    timestamp = timestamp.replace(year=current_year - 1)
-            except ValueError:
-                # Try alternate format with leading space day
-                try:
-                    timestamp = datetime.strptime(
-                        f"{current_year} {ts_str}", "%Y %b  %d %H:%M:%S"
-                    )
-                except ValueError:
-                    pass
+            timestamp = parse_any_timestamp(ts_str, default_year=current_year)
 
             # Extract optional fields
             tty = None
@@ -778,14 +764,14 @@ def collect_last_logins() -> List[CommandEntry]:
 
 
 def _parse_syslog_file(filepath: str, shell_name: str, source_name: str) -> List[CommandEntry]:
-    from .log_parsers import read_log_file_lines
+    from .log_parsers import read_log_file_lines, parse_any_timestamp
     entries = []
     hostname = _get_hostname()
     current_year = datetime.now().year
 
-    # syslog format: Sep  6 10:30:00 hostname process[pid]: message
+    # syslog format: BSD (Sep  6 10:30:00) or ISO (2026-09-06T10:30:00.123456+00:00)
     syslog_pattern = re.compile(
-        r"^(\w{3}\s+\d+\s+[\d:]+)\s+"  # timestamp
+        r"^([A-Z][a-z]{2}\s+\d+\s+[\d:]+|\d{4}-\d{2}-\d{2}T[\d:.]+[\w+-:]*)\s+"  # timestamp
         r"(\S+)\s+"                       # hostname
         r"([^:]+):\s+"                  # process (and optional pid)
         r"(.+)$"                          # message
@@ -802,18 +788,7 @@ def _parse_syslog_file(filepath: str, shell_name: str, source_name: str) -> List
             continue
 
         ts_str, h, proc, msg = match.groups()
-        timestamp = None
-        try:
-            timestamp = datetime.strptime(
-                f"{current_year} {ts_str}", "%Y %b %d %H:%M:%S")
-            if timestamp > datetime.now():
-                timestamp = timestamp.replace(year=current_year - 1)
-        except ValueError:
-            try:
-                timestamp = datetime.strptime(
-                    f"{current_year} {ts_str}", "%Y %b  %d %H:%M:%S")
-            except ValueError:
-                pass
+        timestamp = parse_any_timestamp(ts_str, default_year=current_year)
 
         entries.append(
             CommandEntry(
@@ -980,17 +955,11 @@ def collect_power_events() -> List[CommandEntry]:
                     timestamp = None
                     match = re.search(r"(\w{3}\s+\w{3}\s+\d+\s+[\d:]+\s+\d{4})", line)
                     if match:
-                        try:
-                            timestamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
-                        except ValueError:
-                            pass
+                        timestamp = parse_any_timestamp(match.group(1))
                     if not timestamp:
                         match = re.search(r"(\w{3}\s+\w{3}\s+\d+\s+[\d:]+)", line)
                         if match:
-                            try:
-                                timestamp = datetime.strptime(f"{datetime.now().year} {match.group(1)}", "%Y %a %b %d %H:%M")
-                            except ValueError:
-                                pass
+                            timestamp = parse_any_timestamp(match.group(1))
                     entries.append(CommandEntry(
                         timestamp=timestamp,
                         user="root",
@@ -1016,7 +985,8 @@ def collect_power_events() -> List[CommandEntry]:
                     continue
                 timestamp = None
                 try:
-                    timestamp = datetime.fromisoformat(line.split()[0])
+                    ts = datetime.fromisoformat(line.split()[0])
+                    timestamp = ts.astimezone().replace(tzinfo=None) if ts.tzinfo else ts
                 except Exception:
                     pass
                 entries.append(CommandEntry(
@@ -1040,12 +1010,9 @@ def collect_power_events() -> List[CommandEntry]:
                     if "reboot" not in lowered and "shutdown" not in lowered and "power" not in lowered:
                         continue
                     timestamp = None
-                    match = re.search(r"^(\w{3}\s+\d+\s+[\d:]+)", line)
+                    match = re.search(r"^([A-Z][a-z]{2}\s+\d+\s+[\d:]+|\d{4}-\d{2}-\d{2}T[\d:.]+[\w+-:]*)", line)
                     if match:
-                        try:
-                            timestamp = datetime.strptime(f"{datetime.now().year} {match.group(1)}", "%Y %b %d %H:%M:%S")
-                        except ValueError:
-                            pass
+                        timestamp = parse_any_timestamp(match.group(1))
                     entries.append(CommandEntry(
                         timestamp=timestamp,
                         user="root",
@@ -1556,7 +1523,10 @@ def collect_all(
         progress_callback("Sorting results...", 95)
 
     all_entries.sort(
-        key=lambda e: (e.timestamp is not None, e.timestamp or datetime.min),
+        key=lambda e: (
+            e.timestamp is not None,
+            e.timestamp.replace(tzinfo=None) if e.timestamp and e.timestamp.tzinfo else (e.timestamp or datetime.min)
+        ),
         reverse=True,
     )
 

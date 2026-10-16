@@ -33,7 +33,8 @@ def _db_path() -> str:
     db_path = os.environ.get("CATLOGS_SCANNER_DB")
     if db_path:
         return db_path
-    return os.path.join(os.path.expanduser("~"), ".config", "catlogs", "scanner.db")
+    from .config import CONFIG_DIR
+    return str(CONFIG_DIR / "scanner.db")
 
 
 def _connect() -> sqlite3.Connection:
@@ -174,11 +175,14 @@ def list_findings(session_id: Optional[int] = None) -> List[Dict[str, Any]]:
 
 
 def _sha256_file(path: str) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except (OSError, PermissionError):
+        return ""
 
 
 def scan_directory(directory: str, max_depth: int = 3, max_files: int = 500) -> Dict[str, Any]:
@@ -187,12 +191,14 @@ def scan_directory(directory: str, max_depth: int = 3, max_files: int = 500) -> 
     findings: List[Dict[str, Any]] = []
     visited = 0
 
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
         rel_root = os.path.relpath(root, directory)
         if rel_root == ".":
             depth = 0
         else:
             depth = rel_root.count(os.sep) + 1
+        if depth >= max_depth:
+            dirs.clear()
         if depth > max_depth:
             continue
 

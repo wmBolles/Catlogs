@@ -13,7 +13,7 @@ class TestKeylogger(unittest.TestCase):
         self.bin_file = os.path.join(self.temp_dir.name, "keylogger_bin")
         
         self.patchers = [
-            mock.patch("catlogs.keylogger.PID_FILE", mock.MagicMock(is_file=lambda: os.path.exists(self.pid_file), read_text=lambda: open(self.pid_file).read(), unlink=lambda missing_ok: os.remove(self.pid_file) if os.path.exists(self.pid_file) else None)),
+            mock.patch("catlogs.keylogger.PID_FILE", mock.MagicMock(is_file=lambda: os.path.exists(self.pid_file), read_text=lambda: __import__("pathlib").Path(self.pid_file).read_text(), unlink=lambda missing_ok: os.remove(self.pid_file) if os.path.exists(self.pid_file) else None)),
             mock.patch("catlogs.keylogger.KEYLOGS_FILE", mock.MagicMock(is_file=lambda: os.path.exists(self.log_file), stat=lambda: os.stat(self.log_file))),
             mock.patch("catlogs.keylogger.KEYLOGGER_BINARY", mock.MagicMock(is_file=lambda: os.path.exists(self.bin_file))),
         ]

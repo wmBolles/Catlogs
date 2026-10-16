@@ -106,7 +106,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "log_paths": [dict(p) for p in DEFAULT_LOG_PATHS],
     "enabled_features": {
         "processes": True,
-        "scanner": True,
+        "scanner": False,
         "history": True,
         "read_errors": True,
         "keylogger": True,
@@ -125,8 +125,10 @@ def load_config() -> Dict[str, Any]:
                 config.update(user_config)
                 if "log_paths" not in config or not config["log_paths"]:
                     config["log_paths"] = get_default_log_paths()
-                if "enabled_features" not in config:
-                    config["enabled_features"] = DEFAULT_CONFIG["enabled_features"].copy()
+                features = DEFAULT_CONFIG["enabled_features"].copy()
+                if "enabled_features" in user_config and isinstance(user_config["enabled_features"], dict):
+                    features.update(user_config["enabled_features"])
+                config["enabled_features"] = features
                 return config
         except Exception:
             pass
@@ -173,9 +175,9 @@ def add_log_path(path: str, name: str = "", log_type: str = "auto", enabled: boo
     paths = load_log_paths()
 
     # Normalize path for comparison
-    norm_new = os.path.expanduser(path)
+    norm_new = os.path.expanduser(os.path.expandvars(path))
     for p in paths:
-        if os.path.expanduser(p.get("path", "")) == norm_new:
+        if os.path.expanduser(os.path.expandvars(p.get("path", ""))) == norm_new:
             return False
 
     if not name:
@@ -195,10 +197,10 @@ def remove_log_path(path: str) -> bool:
     """Remove a log path from configuration. Returns True if removed."""
     path = path.strip()
     paths = load_log_paths()
-    norm_target = os.path.expanduser(path)
+    norm_target = os.path.expanduser(os.path.expandvars(path))
 
-    new_paths = [p for p in paths if os.path.expanduser(
-        p.get("path", "")) != norm_target and p.get("path") != path]
+    new_paths = [p for p in paths if os.path.expanduser(os.path.expandvars(
+        p.get("path", ""))) != norm_target and p.get("path") != path]
     if len(new_paths) != len(paths):
         save_log_paths(new_paths)
         return True

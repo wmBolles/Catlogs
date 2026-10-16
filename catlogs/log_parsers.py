@@ -43,7 +43,7 @@ import re
 import json
 import gzip
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -114,12 +114,12 @@ def read_log_file_lines(filepath: str, max_lines: int = 50000) -> List[str]:
             file_size = os.path.getsize(expanded)
             if file_size > 15 * 1024 * 1024:
                 # Seek near the end to get the most recent lines
-                with open(expanded, "r", encoding="utf-8", errors="replace") as f:
+                with open(expanded, "rb") as f:
                     chunk_size = min(file_size, 10 * 1024 * 1024)
                     f.seek(file_size - chunk_size)
                     f.readline()  # discard partial line
-                    for line in f:
-                        lines.append(line.rstrip("\r\n"))
+                    for raw_line in f:
+                        lines.append(raw_line.decode("utf-8", errors="replace").rstrip("\r\n"))
                 if len(lines) > max_lines:
                     lines = lines[-max_lines:]
             else:
@@ -169,7 +169,7 @@ def parse_any_timestamp(text: str, default_year: Optional[int] = None) -> Option
             try:
                 dt = datetime(default_year, month, int(d_str),
                               int(h_str), int(min_str), int(s_str))
-                if dt > datetime.now():
+                if dt > datetime.now() + timedelta(days=2):
                     dt = dt.replace(year=default_year - 1)
                 return dt
             except (ValueError, OverflowError):
@@ -315,7 +315,7 @@ def detect_log_type(filepath: str, sample_lines: Optional[List[str]] = None) -> 
         elif app_log_pattern.match(line):
             app_log_count += 1
 
-    total_tested = max(1, len([l for l in sample_lines[:25] if l.strip()]))
+    total_tested = max(1, len([line for line in sample_lines[:25] if line.strip()]))
     threshold = 1 if total_tested <= 3 else 2
 
     if json_count >= threshold:
@@ -690,7 +690,7 @@ def parse_json_lines(lines: List[str], source: str, filepath: str) -> List[Comma
         for k in ts_keys:
             if k in data:
                 val = data[k]
-                if isinstance(val, (int, float)):
+                if isinstance(val, (int, float)) and not isinstance(val, bool):
                     if val > 1e12:
                         val = val / 1000.0
                     try:

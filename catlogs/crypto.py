@@ -23,7 +23,9 @@ from pathlib import Path
 
 SECRET_ENV_VAR = "CATLOGS_SECRET_KEY"
 LEGACY_KEY = b"CatLogsSecKey123"
-KEY_PATH = Path.home() / ".config" / "catlogs" / "secret.key"
+_xdg_config = os.environ.get("XDG_CONFIG_HOME")
+CONFIG_DIR = (Path(_xdg_config) if _xdg_config else Path.home() / ".config") / "catlogs"
+KEY_PATH = CONFIG_DIR / "secret.key"
 
 
 def _ensure_key_dir() -> None:
@@ -103,6 +105,10 @@ def decrypt_data(data: bytes) -> bytes:
         candidates.append(env_key.strip().encode("utf-8"))
     if SEC_KEY:
         candidates.append(SEC_KEY)
+    try:
+        candidates.append(f"CatLogsSecret-{os.getuid()}".encode("utf-8"))
+    except Exception:
+        pass
     candidates.append(LEGACY_KEY)
     candidates = list(dict.fromkeys(candidates))
 

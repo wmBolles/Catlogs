@@ -33,7 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover - GUI-only environment
     messagebox = None
 
 from . import __version__
-from .safe_exec import build_command_preview_args
+
 from .models import CommandEntry
 from .collectors import collect_all
 from .exporter import export_to_csv, generate_default_filename
@@ -1725,23 +1725,33 @@ Keyboard Shortcuts:
         self.scanner_text.configure(state=tk.DISABLED)
 
         def worker():
-            session = create_scan_session(
-                name=f"Directory scan: {os.path.basename(target) or target}",
-                target=target,
-                mode="unprivileged",
-                status="running",
-            )
-            result = scan_directory(target, max_depth=2, max_files=500)
-            for finding in result.get("findings", []):
-                add_scan_finding(
-                    session_id=session["id"],
-                    rule_name=finding["rule_name"],
-                    severity=finding["severity"],
-                    path=finding["path"],
-                    summary=finding["summary"],
-                    details=finding["details"],
+            try:
+                session = create_scan_session(
+                    name=f"Directory scan: {os.path.basename(target) or target}",
+                    target=target,
+                    mode="unprivileged",
+                    status="running",
                 )
-            self.root.after(0, lambda: self._apply_scanner_result(result, session))
+                result = scan_directory(target, max_depth=2, max_files=500)
+                for finding in result.get("findings", []):
+                    add_scan_finding(
+                        session_id=session["id"],
+                        rule_name=finding["rule_name"],
+                        severity=finding["severity"],
+                        path=finding["path"],
+                        summary=finding["summary"],
+                        details=finding["details"],
+                    )
+                self.root.after(0, lambda: self._apply_scanner_result(result, session))
+            except Exception as exc:  # pragma: no cover - GUI-specific error path
+                err = str(exc)
+                def _show_err(e=err):
+                    self.scanner_summary_var.set("Scan failed.")
+                    self.scanner_text.configure(state=tk.NORMAL)
+                    self.scanner_text.delete("1.0", tk.END)
+                    self.scanner_text.insert(tk.END, f"Scanner error: {e}\n")
+                    self.scanner_text.configure(state=tk.DISABLED)
+                self.root.after(0, _show_err)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1899,28 +1909,26 @@ Useful Resources & Documentation:"""
                     text=True,
                     timeout=8,
                 )
+                rows = parse_process_snapshot(result.stdout or "")
+                signature = tuple(
+                    (
+                        str(row.get("pid", "")),
+                        str(row.get("ppid", "")),
+                        str(row.get("user", "")),
+                        str(row.get("name", "")),
+                        str(row.get("cpu", "")),
+                        str(row.get("mem", "")),
+                        str(row.get("state", "")),
+                        str(row.get("tty", "")),
+                        str(row.get("started", row.get("elapsed", ""))),
+                        str(row.get("command", "")),
+                    )
+                    for row in rows
+                )
+                self.root.after(0, lambda rows=rows, signature=signature: self._apply_process_refresh_result(rows, None, signature))
             except Exception as e:
                 err_msg = f"Unable to read process list: {e}"
                 self.root.after(0, lambda m=err_msg: self._apply_process_refresh_result(None, m))
-                return
-
-            rows = parse_process_snapshot(result.stdout or "")
-            signature = tuple(
-                (
-                    str(row.get("pid", "")),
-                    str(row.get("ppid", "")),
-                    str(row.get("user", "")),
-                    str(row.get("name", "")),
-                    str(row.get("cpu", "")),
-                    str(row.get("mem", "")),
-                    str(row.get("state", "")),
-                    str(row.get("tty", "")),
-                    str(row.get("elapsed", "")),
-                    str(row.get("command", "")),
-                )
-                for row in rows
-            )
-            self.root.after(0, lambda rows=rows, signature=signature: self._apply_process_refresh_result(rows, None, signature))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1962,20 +1970,34 @@ Useful Resources & Documentation:"""
 
         inserted = set()
 
+        if current_filter:
+            matching_pids = set()
+            for r in rows:
+                haystack = " ".join([
+                    str(r["pid"]), r["user"], r["name"], r["command"], r["tty"], r["state"]
+                ]).lower()
+                if current_filter in haystack:
+                    matching_pids.add(r["pid"])
+            ancestors = set()
+            for p in matching_pids:
+                curr = pid_map.get(p)
+                visited_ancestors = set()
+                while curr and curr["ppid"] in pid_map and curr["ppid"] != curr["pid"]:
+                    if curr["ppid"] in visited_ancestors:
+                        break
+                    visited_ancestors.add(curr["ppid"])
+                    ancestors.add(curr["ppid"])
+                    curr = pid_map.get(curr["ppid"])
+            visible_pids = matching_pids | ancestors
+        else:
+            visible_pids = set(pid_map.keys())
+
         def insert_tree(pid, parent_iid=""):
-            if pid in inserted:
+            if pid in inserted or pid not in visible_pids:
                 return
             row = pid_map.get(pid)
             if row is None:
                 return
-
-            filtered = self.processes_search_var.get().strip().lower()
-            if filtered:
-                haystack = " ".join([
-                    str(row["pid"]), row["user"], row["name"], row["command"], row["tty"], row["state"]
-                ]).lower()
-                if filtered not in haystack:
-                    return
 
             values = (
                 row["pid"],
@@ -2007,6 +2029,10 @@ Useful Resources & Documentation:"""
         for root_pid in roots:
             insert_tree(root_pid)
 
+        for row in rows:
+            if row["pid"] in visible_pids and row["pid"] not in inserted:
+                insert_tree(row["pid"])
+
         if self.processes_tree.get_children():
             first = self.processes_tree.get_children()[0]
             self.processes_tree.selection_set(first)
@@ -2016,7 +2042,7 @@ Useful Resources & Documentation:"""
         try:
             load_avg = subprocess.run(["uptime"], capture_output=True, text=True, timeout=4, check=False)
             mem_info = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=4, check=False)
-            proc_info = subprocess.run(["ps", "-eo", "comm", "--no-headers"], capture_output=True, text=True, timeout=4, check=False)
+            proc_info = subprocess.run(["ps", "-eo", "stat", "--no-headers"], capture_output=True, text=True, timeout=4, check=False)
         except Exception:
             return
 
@@ -2024,7 +2050,7 @@ Useful Resources & Documentation:"""
         running_tasks = 0
         if proc_info.returncode == 0:
             total_tasks = sum(1 for line in proc_info.stdout.splitlines() if line.strip())
-            running_tasks = sum(1 for line in proc_info.stdout.splitlines() if line.strip() and line.strip() == "")
+            running_tasks = sum(1 for line in proc_info.stdout.splitlines() if line.strip().startswith("R"))
 
         load_text = load_avg.stdout.strip() if load_avg.returncode == 0 else "load average unavailable"
         load_text = load_text.replace("up ", "").replace("users", "users")
@@ -2207,7 +2233,7 @@ Useful Resources & Documentation:"""
             )
             rb.pack(anchor=tk.W)
 
-        result = {"signal": signal.SIGTERM}
+        result = {"signal": None}
 
         def apply_action():
             result["signal"] = choices.get(choice_var.get(), signal.SIGTERM)
@@ -3738,7 +3764,7 @@ Useful Resources & Documentation:"""
         self.feature_vars = {}
         enabled_features = self.config.setdefault("enabled_features", {
             "processes": True,
-            "scanner": True,
+            "scanner": False,
             "history": True,
             "read_errors": True,
             "keylogger": True,
@@ -4122,11 +4148,15 @@ Useful Resources & Documentation:"""
             return
 
         item_id = selected[0]
-        # fetch the data to log it
-        values = self.tree.item(item_id, "values")
-        if not values:
+        if item_id == "more_items":
             return
-        cmd = values[2]  # Command column
+
+        try:
+            entry_idx = int(item_id)
+            target_entry = self.filtered_entries[entry_idx]
+            cmd = target_entry.command
+        except (ValueError, IndexError):
+            return
 
         from .deletion_history import log_deletion
         prot_mode = self.config.get("protection_mode", True)
@@ -4147,9 +4177,7 @@ Useful Resources & Documentation:"""
             self.tree.delete(item_id)
 
             # Find in self.all_entries and remove
-            for i in range(len(self.all_entries) - 1, -1, -1):
-                if hasattr(self.all_entries[i], 'command') and self.all_entries[i].command == cmd:
-                    del self.all_entries[i]
+            self.all_entries = [e for e in self.all_entries if getattr(e, 'command', None) != cmd]
 
             self._apply_filters()
 
@@ -4793,7 +4821,7 @@ def _handle_exception(exc_type, exc_value, exc_traceback):
 
     try:
         _show_crash_dialog("Application Error", err_msg)
-    except:
+    except Exception:
         pass
 
 
@@ -4829,7 +4857,7 @@ def run():
         pass
 
     root.withdraw()
-    app = CatLogsApp(root)
+    CatLogsApp(root)
     root.deiconify()
 
     root.mainloop()

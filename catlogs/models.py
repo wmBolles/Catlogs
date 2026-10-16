@@ -39,6 +39,13 @@ class CommandEntry:
     status: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self):
+        if self.timestamp is not None and self.timestamp.tzinfo is not None:
+            try:
+                self.timestamp = self.timestamp.astimezone().replace(tzinfo=None)
+            except Exception:
+                self.timestamp = self.timestamp.replace(tzinfo=None)
+
     @property
     def timestamp_str(self) -> str:
         if self.timestamp:
@@ -130,7 +137,7 @@ class CommandEntry:
             "Command": self.command,
             "Shell": self.shell,
             "Source": self.source,
-            "PID": self.pid or "",
+            "PID": self.pid if self.pid is not None else "",
             "TTY": self.tty or "",
             "Working Directory": self.working_dir or "",
             "Exit Code": self.exit_code if self.exit_code is not None else "",

