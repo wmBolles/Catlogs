@@ -36,6 +36,25 @@
 
 <div class="content">
 
+<h2>Latest Release — v1.3.00</h2>
+
+<p>Released October 2026. The current stable release of CatLogs.</p>
+
+<ul>
+    <li>Fixed logical errors and edge cases across all core modules</li>
+    <li>Models: normalize tz-aware timestamps; fix PID serialization in <code>to_dict()</code></li>
+    <li>Config: fix <code>enabled_features</code> merge; expand env vars in log path helpers</li>
+    <li>Crypto: respect <code>XDG_CONFIG_HOME</code> for key path; uid-scoped fallback in <code>decrypt_data</code></li>
+    <li>Scanner: use <code>CONFIG_DIR</code> for db path; graceful unreadable-file handling</li>
+    <li>Log parsers: binary seek for large files; loosen year-rollback jitter to 2 days</li>
+    <li>Collectors: unified timestamp parsing; normalize tz-aware journalctl entries</li>
+    <li>GUI: fix delete-selected logic, signal selection dialog, process tree refresh, scanner error reporting, and running-tasks counter</li>
+</ul>
+
+<p style="margin-top: 20px;"><a href="./catlogs_1.3.00_amd64.deb" class="download-btn">Download v1.3.00 .deb</a></p>
+
+<hr style="margin: 40px 0;">
+
 <h2>Old Releases</h2>
 
 <p>Download previous .deb packages for CatLogs:</p>
@@ -45,8 +64,6 @@
     <li><a href="./catlogs_1.1.0_amd64.deb">CatLogs v1.1.0 (.deb)</a></li>
     <li><a href="./catlogs_1.0.0_amd64.deb">CatLogs v1.0.0 (.deb)</a></li>
 </ul>
-
-<p style="margin-top: 20px;">Looking for the latest version? <a href="./download.html">Go to the download page.</a></p>
 
 </div>
 

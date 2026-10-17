@@ -97,11 +97,13 @@
 
 <h2>What's new in v1.3.00</h2>
 <ul>
-    <li>Dedicated Process Monitor tab for live daemon and service visibility</li>
-    <li>Lock screen, unlock, login, and logout history in the History section</li>
-    <li>Local security scanner with findings persistence and PDF export reporting</li>
-    <li>Boot and power event collection for system lifecycle auditing</li>
-    <li>Professional dark PDF audit report export with compact executive layout</li>
+    <li>Fixed logical errors and edge cases across all core modules</li>
+    <li>Timestamps: normalize tz-aware entries to local naive time across models and collectors</li>
+    <li>Config: fixed <code>enabled_features</code> merge overwriting defaults; env-var expansion in log path helpers</li>
+    <li>Crypto: <code>XDG_CONFIG_HOME</code>-aware key path; uid-scoped fallback in <code>decrypt_data</code></li>
+    <li>Scanner: <code>CONFIG_DIR</code>-based DB path; graceful handling of unreadable files and depth pruning</li>
+    <li>Log parsers: binary seek for large files; tighter year-rollback heuristic</li>
+    <li>GUI: fixed delete-selected, signal-selection dialog, process tree refresh, scanner error reporting, and running-tasks counter</li>
 </ul>
 
 <h2>About the Developer</h2>
