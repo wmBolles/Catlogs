@@ -43,7 +43,7 @@ from .read_errors import load_read_errors, clear_read_errors
 from .log_parsers import LOG_FORMAT_CHOICES, parse_log_file
 from .process_monitor import parse_process_snapshot
 from .scanner import create_scan_session, add_scan_finding, list_findings, scan_directory
-from .updater import check_for_update, fetch_latest_version, get_update_state, install_local_update
+from .updater import check_for_update, fetch_latest_version, get_update_state, install_local_update, download_and_install_update
 
 
 class MultiSelectMenu(ttk.Button):
@@ -3855,36 +3855,101 @@ Useful Resources & Documentation:"""
         update_box.pack(fill=tk.X, pady=(4, 0))
 
         current_version_var = tk.StringVar(value=__import__("catlogs").__version__)
-        latest_version_var = tk.StringVar(value="Checking...")
-        update_status_var = tk.StringVar(value="Checking online release status...")
+        latest_version_var = tk.StringVar(value="—")
+        update_status_var = tk.StringVar(value="Click 'Check for Updates' to check.")
 
-        ttk.Label(update_box, text="Current:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Label(update_box, textvariable=current_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
+        # ── Row 1: version labels ─────────────────────────────────────────────
+        ver_row = ttk.Frame(update_box, style="Toolbar.TFrame")
+        ver_row.pack(fill=tk.X)
 
-        ttk.Label(update_box, text="Latest:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(12, 8))
-        ttk.Label(update_box, textvariable=latest_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
+        ttk.Label(ver_row, text="Current:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(ver_row, textvariable=current_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
+        ttk.Label(ver_row, text="Latest:", font=(self.main_font, 10, "bold")).pack(side=tk.LEFT, padx=(18, 6))
+        ttk.Label(ver_row, textvariable=latest_version_var, font=(self.main_font, 10)).pack(side=tk.LEFT)
 
-        ttk.Button(update_box, text="Check for Updates", command=lambda: self._check_for_update_from_settings(update_status_var, latest_version_var)).pack(side=tk.RIGHT)
-        ttk.Label(update_box, textvariable=update_status_var, font=(self.main_font, 9), foreground=self.colors["fg_dim"]).pack(side=tk.LEFT, padx=(18, 0), fill=tk.X, expand=True)
+        # ── Row 2: buttons + status ───────────────────────────────────────────
+        btn_row = ttk.Frame(update_box, style="Toolbar.TFrame")
+        btn_row.pack(fill=tk.X, pady=(10, 0))
 
-        def load_update_status():
-            try:
-                latest = fetch_latest_version()
-                if latest is None:
-                    latest_version_var.set("Unavailable")
-                    update_status_var.set("Could not reach the update server. Retry later.")
-                    return
-                latest_version_var.set(latest)
-                state = get_update_state(__import__("catlogs").__version__, latest)
-                if state["available"]:
-                    update_status_var.set(f"Update available: {latest} is ready to install.")
-                else:
-                    update_status_var.set("You are on the latest available version.")
-            except Exception:
-                latest_version_var.set("Unavailable")
-                update_status_var.set("Update check failed. Please try again later.")
+        install_btn_var = tk.StringVar(value="Install Update")
+        install_btn = ttk.Button(btn_row, textvariable=install_btn_var, state="disabled")
+        install_btn.pack(side=tk.RIGHT, padx=(6, 0))
 
-        load_update_status()
+        check_btn = ttk.Button(btn_row, text="Check for Updates")
+        check_btn.pack(side=tk.RIGHT)
+
+        ttk.Label(btn_row, textvariable=update_status_var,
+                  font=(self.main_font, 9), foreground=self.colors["fg_dim"],
+                  wraplength=420, justify=tk.LEFT).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # ── Logic ─────────────────────────────────────────────────────────────
+        def _do_install():
+            """Download and install the update in a background thread."""
+            check_btn.configure(state="disabled")
+            install_btn.configure(state="disabled")
+            install_btn_var.set("Installing…")
+
+            def _progress(msg: str):
+                self.root.after(0, lambda m=msg: update_status_var.set(m))
+
+            def _worker():
+                result = download_and_install_update(progress_callback=_progress)
+                def _done(r=result):
+                    update_status_var.set(r.get("message", "Done."))
+                    install_btn_var.set("Install Update")
+                    check_btn.configure(state="normal")
+                    if not r.get("updated"):
+                        install_btn.configure(state="normal")
+                self.root.after(0, _done)
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        install_btn.configure(command=_do_install)
+
+        def _do_check():
+            """Check for updates and reveal the Install button when one is available."""
+            check_btn.configure(state="disabled")
+            install_btn.configure(state="disabled")
+            install_btn_var.set("Install Update")
+            update_status_var.set("Checking…")
+            latest_version_var.set("Checking…")
+
+            def _worker():
+                try:
+                    latest = fetch_latest_version()
+                    if latest is None:
+                        def _no_server():
+                            latest_version_var.set("Unavailable")
+                            update_status_var.set("Could not reach the update server. Retry later.")
+                            check_btn.configure(state="normal")
+                        self.root.after(0, _no_server)
+                        return
+                    state = get_update_state(__import__("catlogs").__version__, latest)
+                    def _show(s=state, l=latest):
+                        latest_version_var.set(l)
+                        if s["available"]:
+                            update_status_var.set(f"v{l} is available — click Install Update to upgrade.")
+                            install_btn.configure(state="normal")
+                        else:
+                            update_status_var.set("You are on the latest available version.")
+                            install_btn.configure(state="disabled")
+                        check_btn.configure(state="normal")
+                    self.root.after(0, _show)
+                except Exception as exc:
+                    def _err(e=exc):
+                        latest_version_var.set("Unavailable")
+                        update_status_var.set(f"Update check failed: {e}")
+                        check_btn.configure(state="normal")
+                    self.root.after(0, _err)
+
+            import threading
+            threading.Thread(target=_worker, daemon=True).start()
+
+        check_btn.configure(command=_do_check)
+
+        # Auto-check when the settings dialog opens
+        self.root.after(200, _do_check)
 
         # -------------------------------------------------------------------
         # TAB 4: FEATURES

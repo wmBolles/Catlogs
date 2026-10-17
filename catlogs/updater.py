@@ -114,6 +114,128 @@ def check_for_update(callback: Optional[Callable[[Optional[str]], None]] = None,
     return state
 
 
+def download_and_install_update(
+    base_url: str = "https://catlogs.wassim.tech",
+    timeout: int = 60,
+    progress_callback=None,
+) -> dict:
+    """Download the latest .deb package and install it.
+
+    Tries in order:
+    1. Download the versioned .deb and run ``sudo dpkg -i`` via pkexec or sudo.
+    2. Fallback: overwrite the running binary directly with the downloaded binary.
+
+    *progress_callback* is called with a human-readable status string as the
+    install progresses.
+    """
+    import shutil
+    import stat
+    import sys
+    import tempfile
+
+    def _progress(msg: str) -> None:
+        if progress_callback is not None:
+            progress_callback(msg)
+
+    # ── 1. Fetch latest version number ──────────────────────────────────────
+    _progress("Fetching latest version info…")
+    version_url = f"{base_url.rstrip('/')}/version.txt"
+    latest_version = fetch_latest_version((version_url,), timeout=8)
+    if not latest_version:
+        return {"updated": False, "message": "Could not reach the update server; please try again later."}
+
+    state = get_update_state(__version__, latest_version)
+    if not state["available"]:
+        return {"updated": False, "message": f"Already on the latest version ({latest_version})."}
+
+    # ── 2. Try .deb install ─────────────────────────────────────────────────
+    arch = "amd64"
+    try:
+        result = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0 and result.stdout.strip():
+            arch = result.stdout.strip()
+    except Exception:
+        pass
+
+    deb_name = f"catlogs_{latest_version}_{arch}.deb"
+    deb_url = f"{base_url.rstrip('/')}/{deb_name}"
+
+    # Check whether dpkg is available at all
+    dpkg_available = shutil.which("dpkg") is not None
+
+    if dpkg_available:
+        _progress(f"Downloading {deb_name}…")
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".deb", delete=False) as tmp:
+                tmp_path = tmp.name
+
+            req = urllib.request.Request(deb_url, headers={"User-Agent": "CatLogsUpdater/1.0"})
+            ctx = ssl.create_default_context()
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(65536)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+
+            _progress("Installing package (may prompt for password)…")
+            # Try pkexec first (graphical sudo), fall back to sudo
+            for prefix in (["pkexec"], ["sudo", "-n"], ["sudo"]):
+                cmd = prefix + ["dpkg", "-i", tmp_path]
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                    if proc.returncode == 0:
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                        return {
+                            "updated": True,
+                            "message": f"CatLogs {latest_version} installed successfully via .deb. Restart the app to use the new version.",
+                        }
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+
+            # All elevated runners failed — clean up and fall through to binary replacement
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        except Exception as exc:
+            _progress(f"deb download failed ({exc}), trying binary update…")
+
+    # ── 3. Fallback: download and replace the running binary ─────────────────
+    bin_url = f"{base_url.rstrip('/')}/catlogs"
+    _progress("Downloading standalone binary…")
+    try:
+        running_exe = os.path.abspath(sys.executable if getattr(sys, "frozen", False) else sys.argv[0])
+        with tempfile.NamedTemporaryFile(delete=False, dir=os.path.dirname(running_exe)) as tmp:
+            tmp_path = tmp.name
+
+        req = urllib.request.Request(bin_url, headers={"User-Agent": "CatLogsUpdater/1.0"})
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            with open(tmp_path, "wb") as f:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+
+        os.chmod(tmp_path, os.stat(tmp_path).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(tmp_path, running_exe)
+        return {
+            "updated": True,
+            "message": f"CatLogs {latest_version} binary updated. Restart the app to use the new version.",
+        }
+    except Exception as exc:
+        return {
+            "updated": False,
+            "message": f"Update failed: {exc}",
+        }
+
+
 def install_local_update(repo_root: Optional[str] = None, base_url: str = "https://catlogs.wassim.tech", timeout: int = 20):
     """Attempt a local update by pulling from git when possible or by fetching release metadata."""
     if repo_root:
