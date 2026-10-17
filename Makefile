@@ -1,7 +1,7 @@
 SHELL      := /bin/bash
 PYTHON     := python3
 APP_NAME   := catlogs
-VERSION    := 1.2.0
+VERSION    := 1.3.00
 DIST_DIR   := dist
 BUILD_DIR  := build
 

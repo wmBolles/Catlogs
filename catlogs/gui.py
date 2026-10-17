@@ -963,6 +963,10 @@ class CatLogsApp:
         self._build_lock_history_page(self.lock_history_page)
         self.history_notebook.add(self.lock_history_page, text="Lock Screen History")
 
+        self.kill_history_page = ttk.Frame(self.history_notebook)
+        self._build_kill_history_page(self.kill_history_page)
+        self.history_notebook.add(self.kill_history_page, text="Kill History")
+
         self.read_errors_page = ttk.Frame(self.content_container)
         self._build_read_errors_page(self.read_errors_page)
 
@@ -1071,6 +1075,7 @@ class CatLogsApp:
             self._refresh_export_history()
             self._refresh_deletion_history()
             self._refresh_lock_history()
+            self._refresh_kill_history()
         elif page_id == "read_errors":
             self.read_errors_page.pack(
                 in_=self.content_container, fill=tk.BOTH, expand=True)
@@ -1418,6 +1423,71 @@ class CatLogsApp:
                 str(entry.source or "logind")
             ))
 
+    def _build_kill_history_page(self, parent):
+        header_frame = ttk.Frame(parent, style="Toolbar.TFrame")
+        header_frame.pack(fill=tk.X)
+
+        inner = ttk.Frame(header_frame, style="Toolbar.TFrame")
+        inner.pack(fill=tk.X, padx=14, pady=10)
+
+        ttk.Label(inner, text="Kill History",
+                  style="Toolbar.TLabel",
+                  font=(self.main_font, 14, "bold")).pack(side=tk.LEFT)
+
+        ttk.Button(inner, text="Export CSV",
+                   command=self._export_kill_history_csv).pack(side=tk.RIGHT, padx=(6, 0))
+        ttk.Button(inner, text="Refresh",
+                   command=self._refresh_kill_history).pack(side=tk.RIGHT, padx=(6, 0))
+
+        ttk.Separator(parent, orient=tk.HORIZONTAL).pack(fill=tk.X)
+
+        columns = ("timestamp", "user", "pid", "name", "signal", "result", "error")
+        self.kill_history_tree = ttk.Treeview(parent, columns=columns, show="headings")
+        self.kill_history_tree.heading("timestamp", text="Time")
+        self.kill_history_tree.heading("user",      text="User")
+        self.kill_history_tree.heading("pid",       text="PID")
+        self.kill_history_tree.heading("name",      text="Process Name")
+        self.kill_history_tree.heading("signal",    text="Signal")
+        self.kill_history_tree.heading("result",    text="Result")
+        self.kill_history_tree.heading("error",     text="Error")
+
+        self.kill_history_tree.column("timestamp", width=155, anchor=tk.W)
+        self.kill_history_tree.column("user",      width=90,  anchor=tk.W)
+        self.kill_history_tree.column("pid",       width=70,  anchor=tk.CENTER)
+        self.kill_history_tree.column("name",      width=150, anchor=tk.W)
+        self.kill_history_tree.column("signal",    width=70,  anchor=tk.CENTER)
+        self.kill_history_tree.column("result",    width=80,  anchor=tk.CENTER)
+        self.kill_history_tree.column("error",     width=260, anchor=tk.W)
+
+        vsb = ttk.Scrollbar(parent, orient=tk.VERTICAL,
+                            command=self.kill_history_tree.yview)
+        self.kill_history_tree.configure(yscrollcommand=vsb.set)
+
+        self.kill_history_tree.pack(
+            side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 0), pady=10)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10), pady=10)
+
+    def _refresh_kill_history(self):
+        from .process_kill_log import load_kill_history
+        for item in self.kill_history_tree.get_children():
+            self.kill_history_tree.delete(item)
+
+        history = load_kill_history()
+        for entry in reversed(history):
+            success = entry.get("success", False)
+            self.kill_history_tree.insert("", "end", values=(
+                entry.get("timestamp", "")[:19].replace("T", " "),
+                entry.get("user", "unknown"),
+                entry.get("pid", ""),
+                entry.get("name", ""),
+                entry.get("signal", ""),
+                "✔ Success" if success else "✘ Failed",
+                entry.get("error", ""),
+            ), tags=("ok",) if success else ("fail",))
+
+        self.kill_history_tree.tag_configure("ok",   foreground="#4caf50")
+        self.kill_history_tree.tag_configure("fail", foreground="#e57373")
+
     def _build_help_page(self, parent):
         header_frame = ttk.Frame(parent, style="Toolbar.TFrame")
         header_frame.pack(fill=tk.X)
@@ -1549,8 +1619,14 @@ Keyboard Shortcuts:
 
         ttk.Label(toolbar, text="Filter:", style="Toolbar.TLabel").pack(side=tk.LEFT, padx=(0, 6))
         self.processes_search_var = tk.StringVar()
-        self.processes_search_var.trace_add("write", lambda *_: self._filter_processes_table())
+        self.processes_search_var.trace_add("write", lambda *_: self._on_process_text_filter_change())
         ttk.Entry(toolbar, textvariable=self.processes_search_var, width=28).pack(side=tk.LEFT)
+
+        ttk.Label(toolbar, text="PID:", style="Toolbar.TLabel").pack(side=tk.LEFT, padx=(12, 6))
+        self.processes_pid_var = tk.StringVar()
+        self.processes_pid_var.trace_add("write", lambda *_: self._on_process_pid_filter_change())
+        self._pid_entry = ttk.Entry(toolbar, textvariable=self.processes_pid_var, width=9)
+        self._pid_entry.pack(side=tk.LEFT)
         ttk.Checkbutton(toolbar, text="Auto refresh", variable=self.processes_auto_refresh,
                         command=self._toggle_process_auto_refresh).pack(side=tk.RIGHT, padx=(0, 8))
         self.processes_summary_var = tk.StringVar(value="Loading processes...")
@@ -2038,6 +2114,11 @@ Useful Resources & Documentation:"""
             self.processes_tree.selection_set(first)
             self._show_selected_process_details()
 
+        # If the user has typed a PID, jump to it now that the tree is fresh.
+        pid_raw = self.processes_pid_var.get().strip()
+        if pid_raw and pid_raw.isdigit():
+            self._jump_to_pid(int(pid_raw))
+
     def _refresh_system_summary(self):
         try:
             load_avg = subprocess.run(["uptime"], capture_output=True, text=True, timeout=4, check=False)
@@ -2095,6 +2176,70 @@ Useful Resources & Documentation:"""
     def _filter_processes_table(self):
         self._refresh_processes()
 
+    def _on_process_text_filter_change(self):
+        """Called when the free-text Filter field changes.
+
+        Clears the PID field (the two filters are mutually exclusive) and
+        triggers a full process-tree refresh so the new text filter is applied.
+        """
+        if getattr(self, "_process_filter_updating", False):
+            return
+        self._process_filter_updating = True
+        try:
+            if self.processes_pid_var.get():
+                self.processes_pid_var.set("")
+            self._filter_processes_table()
+        finally:
+            self._process_filter_updating = False
+
+    def _on_process_pid_filter_change(self):
+        """Called when the PID field changes.
+
+        Validates that the input is a non-negative integer, clears the text
+        filter, and immediately jumps to that process in the tree.  If the
+        field is cleared the tree reverts to the full unfiltered view.
+        """
+        if getattr(self, "_process_filter_updating", False):
+            return
+        raw = self.processes_pid_var.get().strip()
+        if raw and not raw.isdigit():
+            # Non-numeric — ignore the keystroke silently.
+            return
+        self._process_filter_updating = True
+        try:
+            if self.processes_search_var.get():
+                self.processes_search_var.set("")
+        finally:
+            self._process_filter_updating = False
+        if raw:
+            self._jump_to_pid(int(raw))
+        else:
+            # PID field emptied — restore full view.
+            self._filter_processes_table()
+
+
+    def _jump_to_pid(self, pid: int):
+        """Select and scroll to the tree row for *pid*.
+
+        If the row is already rendered (iid == str(pid)) we jump directly
+        without rebuilding the tree, making it instantaneous.  If the row
+        is not found the summary bar shows a brief 'not found' hint and a
+        full refresh is triggered so the tree contains all processes (in
+        case a previous text-filter was hiding it).
+        """
+        iid = str(pid)
+        if self.processes_tree.exists(iid):
+            self.processes_tree.selection_set(iid)
+            self.processes_tree.see(iid)
+            self._show_selected_process_details()
+            self.processes_summary_var.set(
+                f"Jumped to PID {pid}"
+            )
+        else:
+            # The row is not in the current tree — do a full refresh so all
+            # processes are visible, then jump once the tree is rebuilt.
+            self._refresh_processes()
+
     def _show_selected_process_details(self, event=None):
         selection = self.processes_tree.selection()
         if not selection:
@@ -2128,157 +2273,137 @@ Useful Resources & Documentation:"""
 
         choices = {
             "TERM": signal.SIGTERM,
-            "INT": signal.SIGINT,
+            "INT":  signal.SIGINT,
             "KILL": signal.SIGKILL,
             "QUIT": signal.SIGQUIT,
-            "HUP": signal.SIGHUP,
+            "HUP":  signal.SIGHUP,
             "STOP": signal.SIGSTOP,
             "CONT": signal.SIGCONT,
             "USR1": signal.SIGUSR1,
             "USR2": signal.SIGUSR2,
         }
 
+        descriptions = {
+            "TERM": "Graceful terminate (default)",
+            "INT":  "Interrupt  (Ctrl+C equivalent)",
+            "KILL": "Force kill — unblockable",
+            "QUIT": "Quit with core dump",
+            "HUP":  "Hangup / reload config",
+            "STOP": "Pause (suspend) process",
+            "CONT": "Resume paused process",
+            "USR1": "User-defined signal 1",
+            "USR2": "User-defined signal 2",
+        }
+
         dialog = tk.Toplevel(self.root)
         dialog.withdraw()
+        dialog.title("Kill Process")
         dialog.transient(self.root)
         dialog.grab_set()
-        dialog.attributes("-topmost", True)
-        dialog.minsize(500, 420)
-        dialog.configure(bg="#1c1f22")
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
+        dialog.configure(bg="#1e2125")
 
-        width = 500
-        height = 440
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
-        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        # ── Centre on parent ──────────────────────────────────────────────
+        width, height = 430, 310
+        px = self.root.winfo_rootx() + (self.root.winfo_width()  - width)  // 2
+        py = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{px}+{py}")
+        dialog.minsize(340, 260)
 
-        header = tk.Frame(dialog, bg="#2b2f33", height=52)
-        header.pack(fill=tk.X)
-        header.pack_propagate(False)
+        # ── Header bar ────────────────────────────────────────────────────
+        hdr = tk.Frame(dialog, bg="#2b2f33", height=42)
+        hdr.pack(fill=tk.X)
+        hdr.pack_propagate(False)
+        tk.Label(hdr, text="Kill Process", bg="#2b2f33", fg="#f0f0f0",
+                 font=(self.main_font, 12, "bold"), anchor="w").pack(
+                     side=tk.LEFT, padx=14, fill=tk.Y)
+        tk.Button(hdr, text="✕", bg="#2b2f33", fg="#aaaaaa",
+                  activebackground="#c0392b", activeforeground="#ffffff",
+                  command=dialog.destroy, bd=0, padx=12, pady=0,
+                  font=(self.main_font, 12)).pack(side=tk.RIGHT, fill=tk.Y)
 
-        title = tk.Label(header, text="CatLogs", bg="#2b2f33", fg="#f0f0f0",
-                         font=(self.main_font, 20, "bold"), anchor="w")
-        title.pack(side=tk.LEFT, padx=(18, 0), pady=(8, 0), fill=tk.X, expand=True)
-
-        close_btn = tk.Button(
-            header,
-            text="×",
-            bg="#2b2f33",
-            fg="#f0f0f0",
-            activebackground="#3a3f45",
-            activeforeground="#ffffff",
-            command=dialog.destroy,
-            bd=0,
-            padx=14,
-            pady=4,
-            font=(self.main_font, 20, "bold"),
-        )
-        close_btn.pack(side=tk.RIGHT, padx=(0, 12))
-
-        body = tk.Frame(dialog, bg="#dfe1e2", padx=22, pady=18)
+        # ── Body ──────────────────────────────────────────────────────────
+        body = tk.Frame(dialog, bg="#1e2125", padx=18, pady=14)
         body.pack(fill=tk.BOTH, expand=True)
 
-        heading = tk.Label(
-            body,
-            text="Select signal",
-            bg="#dfe1e2",
-            fg="#1a1d20",
-            justify=tk.LEFT,
-            anchor="w",
-            font=(self.main_font, 28, "bold"),
-        )
-        heading.pack(anchor=tk.W, pady=(0, 4))
+        # Target process info row
+        proc_text = f"PID {pid}  —  {name}"
+        tk.Label(body, text=proc_text, bg="#1e2125", fg="#e0e0e0",
+                 font=(self.main_font, 11, "bold"), anchor="w",
+                 wraplength=390).pack(anchor=tk.W, pady=(0, 10))
 
-        target = tk.Label(
-            body,
-            text=f"Kill PID {pid} ({name})",
-            bg="#dfe1e2",
-            fg="#1a1d20",
-            justify=tk.LEFT,
-            anchor="w",
-            font=(self.main_font, 22, "bold"),
-            wraplength=440,
-        )
-        target.pack(anchor=tk.W, pady=(0, 12))
+        # ── Signal selection (3-column grid) ─────────────────────────────
+        sig_frame = tk.LabelFrame(body, text="Signal to send",
+                                  bg="#1e2125", fg="#888888",
+                                  font=(self.main_font, 9),
+                                  padx=8, pady=6, bd=1, relief=tk.SOLID)
+        sig_frame.pack(fill=tk.X)
 
         choice_var = tk.StringVar(value="TERM")
-        option_frame = tk.LabelFrame(
-            body,
-            text="Signal to send",
-            bg="#dfe1e2",
-            fg="#1d2125",
-            font=(self.main_font, 13, "bold"),
-            padx=14,
-            pady=12,
-        )
-        option_frame.pack(fill=tk.BOTH, expand=True)
-
-        for label in ["TERM", "INT", "KILL", "QUIT", "HUP", "STOP", "CONT", "USR1", "USR2"]:
-            rb = tk.Radiobutton(
-                option_frame,
-                text=label,
+        signal_labels = ["TERM", "INT", "KILL", "QUIT", "HUP", "STOP", "CONT", "USR1", "USR2"]
+        for i, lbl in enumerate(signal_labels):
+            row_i, col_i = divmod(i, 3)
+            tk.Radiobutton(
+                sig_frame,
+                text=lbl,
                 variable=choice_var,
-                value=label,
-                bg="#dfe1e2",
-                fg="#1d2125",
-                activebackground="#dfe1e2",
-                activeforeground="#1d2125",
-                selectcolor="#dfe1e2",
-                font=(self.main_font, 18),
+                value=lbl,
+                bg="#1e2125",
+                fg="#d0d0d0",
+                selectcolor="#1e2125",
+                activebackground="#1e2125",
+                activeforeground="#ffffff",
+                font=(self.main_font, 10),
                 indicatoron=1,
                 highlightthickness=0,
-                padx=8,
-                pady=4,
-            )
-            rb.pack(anchor=tk.W)
+                padx=6,
+                pady=3,
+                anchor="w",
+            ).grid(row=row_i, column=col_i, sticky="w", padx=(2, 14), pady=1)
+            sig_frame.columnconfigure(col_i, weight=1)
 
+        # Dynamic description
+        desc_var = tk.StringVar(value=descriptions["TERM"])
+        tk.Label(body, textvariable=desc_var, bg="#1e2125", fg="#5d6470",
+                 font=(self.main_font, 9, "italic"), anchor="w").pack(
+                     anchor=tk.W, pady=(6, 0))
+        choice_var.trace_add("write",
+                             lambda *_: desc_var.set(descriptions.get(choice_var.get(), "")))
+
+        # ── Action buttons ────────────────────────────────────────────────
         result = {"signal": None}
 
-        def apply_action():
+        def _apply():
             result["signal"] = choices.get(choice_var.get(), signal.SIGTERM)
             dialog.destroy()
 
-        action_row = tk.Frame(body, bg="#dfe1e2")
-        action_row.pack(fill=tk.X, pady=(16, 0))
+        btn_row = tk.Frame(body, bg="#1e2125")
+        btn_row.pack(fill=tk.X, pady=(14, 0))
 
-        cancel_btn = tk.Button(
-            action_row,
-            text="Cancel",
-            bg="#dfe1e2",
-            fg="#1d2125",
-            activebackground="#dfe1e2",
-            activeforeground="#1d2125",
-            command=dialog.destroy,
-            font=(self.main_font, 14),
-            bd=1,
-            padx=16,
-            pady=8,
-        )
-        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+        tk.Button(btn_row, text="Cancel",
+                  bg="#2b2f33", fg="#c0c0c0",
+                  activebackground="#3a3f45", activeforeground="#ffffff",
+                  command=dialog.destroy,
+                  font=(self.main_font, 10), bd=1, padx=14, pady=6,
+                  ).pack(side=tk.RIGHT, padx=(8, 0))
 
-        send_btn = tk.Button(
-            action_row,
-            text="Send signal",
-            bg="#2d3d4d",
-            fg="#f2f2f2",
-            activebackground="#3e536a",
-            activeforeground="#ffffff",
-            command=apply_action,
-            font=(self.main_font, 14, "bold"),
-            bd=1,
-            padx=18,
-            pady=8,
-        )
+        send_btn = tk.Button(btn_row, text="Send Signal",
+                             bg="#c0392b", fg="#ffffff",
+                             activebackground="#e74c3c", activeforeground="#ffffff",
+                             command=_apply,
+                             font=(self.main_font, 10, "bold"), bd=0, padx=16, pady=6)
         send_btn.pack(side=tk.RIGHT)
         send_btn.focus_set()
-        dialog.bind("<Return>", lambda _e: apply_action())
+
+        dialog.bind("<Return>", lambda _e: _apply())
+        dialog.bind("<Escape>", lambda _e: dialog.destroy())
 
         dialog.deiconify()
         dialog.wait_window(dialog)
         return result["signal"]
 
     def _kill_selected_process(self):
+        from .process_kill_log import log_process_kill
         selection = self.processes_tree.selection()
         if not selection:
             messagebox.showinfo("Process Monitor", "Select a process to kill.")
@@ -2292,32 +2417,46 @@ Useful Resources & Documentation:"""
         if signal_to_send is None:
             return
 
+        _sig_map = {
+            "TERM": signal.SIGTERM,
+            "INT":  signal.SIGINT,
+            "KILL": signal.SIGKILL,
+            "QUIT": signal.SIGQUIT,
+            "HUP":  signal.SIGHUP,
+            "STOP": signal.SIGSTOP,
+            "CONT": signal.SIGCONT,
+            "USR1": signal.SIGUSR1,
+            "USR2": signal.SIGUSR2,
+        }
+        signal_name = next(
+            (k for k, v in _sig_map.items() if v == signal_to_send), "TERM")
+
         try:
             os.kill(pid, signal_to_send)
-            signal_name = next((name for name, sig in {
-                "TERM": signal.SIGTERM,
-                "INT": signal.SIGINT,
-                "KILL": signal.SIGKILL,
-                "QUIT": signal.SIGQUIT,
-                "HUP": signal.SIGHUP,
-                "STOP": signal.SIGSTOP,
-                "CONT": signal.SIGCONT,
-                "USR1": signal.SIGUSR1,
-                "USR2": signal.SIGUSR2,
-            }.items() if sig == signal_to_send), "SIGTERM")
-            messagebox.showinfo("Process Monitor", f"Signal {signal_name} sent to PID {pid} ({name}).")
+            log_process_kill(pid, name, signal_name, success=True)
+            messagebox.showinfo(
+                "Process Monitor",
+                f"Signal {signal_name} sent to PID {pid} ({name}).")
             self._refresh_processes()
             return
-        except PermissionError:
+        except PermissionError as exc:
+            log_process_kill(pid, name, signal_name, success=False,
+                             error="Permission denied")
             messagebox.showerror(
                 "Permission denied",
-                f"You do not have permission to send signal to PID {pid} ({name}).\nTry running CatLogs with elevated privileges.")
+                f"You do not have permission to send signal to PID {pid} ({name}).\n"
+                "Try running CatLogs with elevated privileges.")
             return
         except ProcessLookupError:
+            log_process_kill(pid, name, signal_name, success=False,
+                             error="Process not found")
             messagebox.showinfo("Process Monitor", f"PID {pid} is already gone.")
             return
         except Exception as exc:
+            log_process_kill(pid, name, signal_name, success=False,
+                             error=str(exc))
             messagebox.showerror("Kill failed", f"Could not signal PID {pid}: {exc}")
+
 
     def _build_keylogger_page(self, parent):
 
@@ -4650,6 +4789,16 @@ Useful Resources & Documentation:"""
         from .export_log import load_export_history
         history = load_export_history()
         self._export_generic_csv(history, ["timestamp", "filepath", "record_count", "version"], "Export Export History", "catlogs_exports")
+
+    def _export_kill_history_csv(self):
+        from .process_kill_log import load_kill_history
+        history = load_kill_history()
+        self._export_generic_csv(
+            history,
+            ["timestamp", "user", "pid", "name", "signal", "success", "error"],
+            "Export Kill History",
+            "catlogs_kill_history",
+        )
 
     def _export_keylogger_csv(self):
         from .keylogger import read_keylogs

@@ -76,3 +76,6 @@ keylogger/keylogs.txt
 
 # macOS / OS X
 .DS_Store
+
+# Release archives (too large for GitHub)
+*.tar.gz
